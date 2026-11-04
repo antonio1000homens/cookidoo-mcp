@@ -17,6 +17,8 @@ def test_public_endpoint_unavailable_by_default():
     workflow = load(".github/workflows/deploy.yml")
     assert "DEPLOY-PRIVATE-LAMBDA" in workflow
     assert "EnableFunctionUrl=false" in load("scripts/deploy-aws.sh")
+    assert "OriginBearerParameterName" in app
+    assert "ssm:PutParameter" in load("infrastructure/bootstrap-github.yaml")
 
 
 def test_oidc_restricted_to_exact_repository_and_production_environment():
@@ -30,13 +32,16 @@ def test_oidc_restricted_to_exact_repository_and_production_environment():
     assert "repo:antonio1000homens/*" not in bootstrap
 
 
-def test_no_public_url_iam_permissions_granted():
+def test_function_url_activation_is_separately_confirmed_and_scoped():
     bootstrap = load("infrastructure/bootstrap-github.yaml")
-    assert not any(
-        line.strip().startswith("- lambda:" + action)
-        for line in bootstrap.splitlines()
-        for action in ("CreateFunctionUrlConfig", "AddPermission", "InvokeFunctionUrl")
-    )
+    activation = load(".github/workflows/activate-function-url.yml")
+    assert "ACTIVATE-COOKIDOO-FUNCTION-URL" in activation
+    assert "lambda:CreateFunctionUrlConfig" in bootstrap
+    assert "parameter/cookidoo-mcp/origin-bearer" in bootstrap
+    assert "stack-name cookidoo-mcp" in activation
+    assert "Function URL already exists" in activation
+    assert "EnableFunctionUrl=true" in activation
+    assert "assert_no_function_url" in load("scripts/deploy-aws.sh")
     assert "arn:__D__{AWS::Partition}:s3:::__D__{CodeBucket}/cookidoo-mcp/*".replace("__D__", "$") in bootstrap
 
 

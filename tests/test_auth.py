@@ -1,5 +1,6 @@
 """Requests to direct Lambda origin must not bypass Cloudflare authentication."""
 import time
+import sys
 from types import SimpleNamespace
 
 import jwt
@@ -21,21 +22,59 @@ class StubVerifier:
             raise ValueError("invalid")
 
 
+class StubOriginGate(AccessGate):
+    def _expected_origin_token(self):
+        return "dedicated-origin-token"
+
+
 def test_direct_origin_is_fail_closed():
     # Standalone test origin has no ASGI lifespan handler; avoid triggering one.
-    client = TestClient(AccessGate(origin, StubVerifier()))
+    client = TestClient(StubOriginGate(origin, StubVerifier()))
     assert client.get("/health").status_code == 403
+    assert client.get(
+        "/health", headers={"Cf-Access-Jwt-Assertion": "signed-access-token"}
+    ).status_code == 403
     assert client.get("/health", headers={"Cf-Access-Jwt-Assertion": "fake"}).status_code == 403
-    ok_health = client.get("/health", headers={"Cf-Access-Jwt-Assertion": "signed-access-token"})
+    both = {"Cf-Access-Jwt-Assertion": "signed-access-token", "Authorization": "Bearer dedicated-origin-token"}
+    assert client.get("/health", headers={**both, "Authorization": "Bearer wrong"}).status_code == 403
+    assert client.get(
+        "/health", headers={"Authorization": "Bearer dedicated-origin-token"}
+    ).status_code == 403
+    ok_health = client.get("/health", headers=both)
     assert ok_health.status_code == 200
     assert ok_health.text == "ok"
     assert ok_health.headers["cache-control"] == "no-store"
     assert client.get("/mcp").status_code == 403
-    assert client.post("/mcp", headers={"Cf-Access-Jwt-Assertion": "fake"}).status_code == 403
+    assert client.post("/mcp", headers={"Cf-Access-Jwt-Assertion": "fake", "Authorization": "Bearer dedicated-origin-token"}).status_code == 403
     assert client.get("/other", headers={"Cf-Access-Jwt-Assertion": "signed-access-token"}).status_code == 404
-    ok = client.post("/mcp", headers={"Cf-Access-Jwt-Assertion": "signed-access-token"})
+    ok = client.post("/mcp", headers=both)
     assert ok.status_code == 200
     assert ok.text == "origin reached"
+
+
+def test_origin_token_is_loaded_once_from_ssm_securely(monkeypatch):
+    from src.auth import AccessGate
+
+    calls = []
+    fake_ssm = SimpleNamespace(
+        get_parameter=lambda **kwargs: calls.append(kwargs) or {
+            "Parameter": {"Value": "a-long-secret-origin-bearer"}
+        }
+    )
+    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda name: fake_ssm))
+    monkeypatch.setenv("ORIGIN_BEARER_PARAM", "/cookidoo-mcp/origin-bearer")
+    gate = AccessGate(origin, StubVerifier())
+    assert gate._expected_origin_token() == "a-long-secret-origin-bearer"
+    assert gate._expected_origin_token() == "a-long-secret-origin-bearer"
+    assert calls == [{"Name": "/cookidoo-mcp/origin-bearer", "WithDecryption": True}]
+
+
+def test_origin_token_missing_configuration_fails_closed(monkeypatch):
+    from src.auth import AccessGate
+
+    monkeypatch.delenv("ORIGIN_BEARER_PARAM", raising=False)
+    with pytest.raises(RuntimeError, match="Origin bearer parameter is not configured"):
+        AccessGate(origin, StubVerifier())._expected_origin_token()
 
 
 def test_missing_cloudflare_settings_fails_startup(monkeypatch):
