@@ -70,16 +70,17 @@ class AccessGate:
 
         path = scope.get("path", "")
         method = scope.get("method", "")
-        if path == "/health" and method == "GET":
-            await PlainTextResponse("ok", headers={"Cache-Control": "no-store"})(
+        if path not in ("/mcp", "/mcp/", "/health"):
+            await PlainTextResponse("Not found", status_code=404)(scope, receive, send)
+            return
+        if path == "/health" and method != "GET":
+            await PlainTextResponse("Method not allowed", status_code=405)(
                 scope, receive, send
             )
             return
 
-        if path not in ("/mcp", "/mcp/"):
-            await PlainTextResponse("Not found", status_code=404)(scope, receive, send)
-            return
-
+        # There is no unauthenticated HTTP path, including the health check:
+        # a future raw AWS Function URL must not be callable without Access.
         token = next(
             (
                 value.decode("ascii", errors="ignore")
@@ -96,6 +97,11 @@ class AccessGate:
         except Exception:
             # Do not log tokens, decoded claims, passwords or upstream exceptions.
             await self._deny(scope, receive, send)
+            return
+        if path == "/health":
+            await PlainTextResponse("ok", headers={"Cache-Control": "no-store"})(
+                scope, receive, send
+            )
             return
         await self.app(scope, receive, send)
 

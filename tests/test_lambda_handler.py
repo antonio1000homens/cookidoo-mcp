@@ -45,7 +45,7 @@ def test_lambda_denies_direct_origin_without_signed_identity(monkeypatch):
     assert runtime.handler(
         _event(headers={"cf-access-jwt-assertion": "tampered"}), {}
     )["statusCode"] == 403
-    assert runtime.handler(_event(path="/health", method="GET"), {})["statusCode"] == 200
+    assert runtime.handler(_event(path="/health", method="GET"), {})["statusCode"] == 403
 
 
 def test_lambda_json_mcp_tools_list_is_read_only(monkeypatch):

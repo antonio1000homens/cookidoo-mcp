@@ -15,7 +15,7 @@ ChatGPT custom MCP connector
   -> Cookidoo
 ```
 
-There are **no containers**, ECR, Docker builds, running VMs, SQS polling, DynamoDB tables, provisioned concurrency, NAT gateways, API Gateway or AWS Secrets Manager charges. The planned release uses an existing regional S3 deployment bucket for the ZIP. The Lambda Function URL is **disabled by default**; a signed `Cf-Access-Jwt-Assertion` is cryptographically verified on *every MCP request*, including those sent directly to its raw AWS URL. `/health` reveals no account information.
+There are **no containers**, ECR, Docker builds, running VMs, SQS polling, DynamoDB tables, provisioned concurrency, NAT gateways, API Gateway or AWS Secrets Manager charges. The planned release uses an existing regional S3 deployment bucket for the ZIP. The Lambda Function URL is **disabled by default**; a signed `Cf-Access-Jwt-Assertion` is cryptographically verified on *every MCP request*, including those sent directly to its raw AWS URL. `/health` is also JWT-protected, and reveals no account information.
 
 **£0/month is a target, not a contractual guarantee:** free allowances are shared with other workloads. Lambda duration/requests, CloudWatch Logs, S3 storage and data transfer can incur usage costs. Choose SSM **standard** SecureString parameters under standard throughput and the AWS-managed KMS key to avoid fixed secret-store charges. Do not enable advanced parameters, provisioned concurrency, a NAT gateway or other resources with fixed charges.
 

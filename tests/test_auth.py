@@ -24,7 +24,12 @@ class StubVerifier:
 def test_direct_origin_is_fail_closed():
     # Standalone test origin has no ASGI lifespan handler; avoid triggering one.
     client = TestClient(AccessGate(origin, StubVerifier()))
-    assert client.get("/health").status_code == 200
+    assert client.get("/health").status_code == 403
+    assert client.get("/health", headers={"Cf-Access-Jwt-Assertion": "fake"}).status_code == 403
+    ok_health = client.get("/health", headers={"Cf-Access-Jwt-Assertion": "signed-access-token"})
+    assert ok_health.status_code == 200
+    assert ok_health.text == "ok"
+    assert ok_health.headers["cache-control"] == "no-store"
     assert client.get("/mcp").status_code == 403
     assert client.post("/mcp", headers={"Cf-Access-Jwt-Assertion": "fake"}).status_code == 403
     assert client.get("/other", headers={"Cf-Access-Jwt-Assertion": "signed-access-token"}).status_code == 404
