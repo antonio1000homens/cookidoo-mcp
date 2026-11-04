@@ -1,0 +1,108 @@
+name: Validate / deploy Cookidoo MCP ZIP Lambda (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: 'Validate only (no AWS), or deploy a private Lambda'
+        required: true
+        type: choice
+        options:
+          - validate
+          - deploy
+        default: validate
+      confirmation:
+        description: 'For deploy, enter DEPLOY-PRIVATE-LAMBDA exactly'
+        required: false
+        type: string
+
+# Never give OIDC tokens to PR or validation jobs.
+permissions: {}
+
+concurrency:
+  group: cookidoo-mcp-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out reviewed master
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+      - name: Check manual bootstrap / deployment scripts
+        run: bash -n scripts/bootstrap-aws.sh scripts/deploy-aws.sh
+      - name: Validate CloudFormation, with no AWS access
+        run: |
+          uvx --from cfn-lint==1.53.3 cfn-lint \
+            infrastructure/bootstrap-github.yaml \
+            infrastructure/cookidoo.yaml
+      - name: Build an immutable Python 3.12 ZIP artifact
+        run: bash scripts/build-zip.sh
+      - name: Verify packaged Lambda handler and dependency
+        run: |
+          set -euo pipefail
+          test -s dist/cookidoo-mcp.zip
+          unzip -l dist/cookidoo-mcp.zip | grep -q 'src/lambda_handler.py'
+          unzip -l dist/cookidoo-mcp.zip | grep -q 'mangum/'
+      - name: Retain the exact validated ZIP for the deploy job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a # v7
+        with:
+          name: cookidoo-mcp-zip
+          path: dist/cookidoo-mcp.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  deploy:
+    if: >-
+      github.ref == 'refs/heads/master' &&
+      inputs.operation == 'deploy' &&
+      inputs.confirmation == 'DEPLOY-PRIVATE-LAMBDA'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-2' }}
+      CODE_BUCKET: ${{ vars.CODE_BUCKET }}
+      AWS_CLOUDFORMATION_ROLE_ARN: ${{ vars.AWS_CLOUDFORMATION_ROLE_ARN }}
+      CF_ACCESS_TEAM_DOMAIN: ${{ vars.CF_ACCESS_TEAM_DOMAIN }}
+      CF_ACCESS_AUD: ${{ vars.CF_ACCESS_AUD }}
+    steps:
+      - name: Check out reviewed master
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Download ZIP built by validation job
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: cookidoo-mcp-zip
+          path: dist
+      - name: Check required deployment configuration
+        env:
+          DEPLOY_ROLE_ARN: ${{ vars.AWS_ROLE_TO_ASSUME }}
+        run: |
+          set -euo pipefail
+          for key in DEPLOY_ROLE_ARN CODE_BUCKET AWS_CLOUDFORMATION_ROLE_ARN CF_ACCESS_TEAM_DOMAIN CF_ACCESS_AUD; do
+            if [ -z "${!key:-}" ]; then
+              echo "::error::Missing production environment variable: $key"
+              exit 1
+            fi
+          done
+          if [[ ! "$CF_ACCESS_TEAM_DOMAIN" =~ ^https://[a-zA-Z0-9.-]+[.]cloudflareaccess[.]com$ ]]; then
+            echo "::error::Invalid Cloudflare Access issuer"
+            exit 1
+          fi
+      - name: Assume dedicated role using short-lived GitHub OIDC token
+        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7 # v6.0.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: cookidoo-mcp-zip-release
+      - name: Publish exact ZIP and deploy private Lambda
+        run: bash scripts/deploy-aws.sh
