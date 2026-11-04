@@ -61,6 +61,11 @@ def test_lambda_json_mcp_tools_list_is_read_only(monkeypatch):
         "from_environment",
         classmethod(lambda cls: StubVerifier()),
     )
+    monkeypatch.setattr(
+        auth.AccessGate,
+        "_expected_origin_token",
+        lambda _self: "offline-origin-token",
+    )
     import src.lambda_handler as runtime
 
     importlib.reload(runtime)
@@ -68,6 +73,7 @@ def test_lambda_json_mcp_tools_list_is_read_only(monkeypatch):
         _event(
             headers={
                 "cf-access-jwt-assertion": "offline-only-token",
+                "authorization": "Bearer offline-origin-token",
                 "accept": "application/json, text/event-stream",
                 "mcp-protocol-version": "2025-06-18",
             },
