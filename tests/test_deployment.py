@@ -40,6 +40,8 @@ def test_function_url_activation_is_separately_confirmed_and_scoped():
     assert "/cookidoo-mcp/origin-bearer" in app
     assert "stack-name cookidoo-mcp" in activation
     assert "Function URL already exists" in activation
+    assert "ssm:DescribeParameters" not in activation
+    assert "configured SSM path" in activation
     assert "EnableFunctionUrl=true" in activation
     assert "assert_no_function_url" in load("scripts/deploy-aws.sh")
     assert "arn:__D__{AWS::Partition}:s3:::__D__{CodeBucket}/cookidoo-mcp/*".replace("__D__", "$") in bootstrap
