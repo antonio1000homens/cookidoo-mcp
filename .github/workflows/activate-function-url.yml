@@ -32,13 +32,21 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: cookidoo-function-url-activation
-      - name: Require deployed private Lambda and provisioned origin secret
+      - name: Require deployed private Lambda and configured SSM path
         run: |
           set -euo pipefail
-          aws lambda get-function-configuration --function-name cookidoo-mcp --region "$AWS_REGION" --query '[State,LastUpdateStatus]' --output text | grep -q $'Active\tSuccessful'
-          aws ssm describe-parameters --region "$AWS_REGION" --parameter-filters Key=Name,Option=Equals,Values=/cookidoo-mcp/origin-bearer --query 'Parameters[0].Type' --output text | grep -qx SecureString
-          if aws lambda get-function-url-config --function-name cookidoo-mcp --region "$AWS_REGION" >/dev/null 2>&1; then
+          config="$(aws lambda get-function-configuration --function-name cookidoo-mcp --region "$AWS_REGION" \
+            --query '[State,LastUpdateStatus,Environment.Variables.ORIGIN_BEARER_PARAM]' --output text)"
+          [[ "$config" == $'Active\tSuccessful\t/cookidoo-mcp/origin-bearer' ]] || {
+            echo 'Lambda is not Active with the expected SSM parameter path.' >&2
+            exit 1
+          }
+          if url_state="$(aws lambda get-function-url-config --function-name cookidoo-mcp --region "$AWS_REGION" \
+            --query '[FunctionUrl,AuthType]' --output text 2>&1)"; then
             echo 'Function URL already exists; inspect and stop.' >&2; exit 1
+          elif [[ "$url_state" != *ResourceNotFoundException* ]]; then
+            echo 'Could not determine Function URL state; refusing activation.' >&2
+            exit 1
           fi
       - name: Activate AWS Function URL as a separate reviewed action
         run: |
