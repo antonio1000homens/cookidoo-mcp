@@ -22,6 +22,10 @@ Parameters:
     Type: String
     Default: /cookidoo-mcp/password
     AllowedPattern: '^/[a-zA-Z0-9_.\-/]+$'
+  OriginBearerParameterName:
+    Type: String
+    Default: /cookidoo-mcp/origin-bearer
+    AllowedPattern: '^/[a-zA-Z0-9_.\-/]+$'
   CloudflareTeamDomain:
     Type: String
     Description: Example https://my-team.cloudflareaccess.com
@@ -69,6 +73,7 @@ Resources:
                 Resource:
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${EmailParameterName}
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${PasswordParameterName}
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${OriginBearerParameterName}
         - PolicyName: WriteOwnLogsOnly
           PolicyDocument:
             Version: '2012-10-17'
@@ -101,6 +106,7 @@ Resources:
           COOKIDOO_DEVICE: TM7
           COOKIDOO_EMAIL_PARAM: !Ref EmailParameterName
           COOKIDOO_PASSWORD_PARAM: !Ref PasswordParameterName
+          ORIGIN_BEARER_PARAM: !Ref OriginBearerParameterName
           CF_ACCESS_TEAM_DOMAIN: !Ref CloudflareTeamDomain
           CF_ACCESS_AUD: !Ref CloudflareAudience
 

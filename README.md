@@ -2,24 +2,24 @@
 
 Standalone public infrastructure/application repository for an **unofficial** Cookidoo integration. Python runtime uses upstream [alexandrepa/mcp-cookidoo](https://github.com/alexandrepa/mcp-cookidoo) pinned at commit `6f7c33b1d23f8257814fd790341bc84cd88785e0` (v1.1.0). Do not commit passwords, cookies, tokens or personal recipes.
 
-**Status:** The Lambda-first foundation (PR #2) and native ZIP/Mangum deployment (PR #3) are merged. A follow-up PR adds manual GitHub OIDC deployment. **No AWS deployment has been performed by this repository work.**
+**Status:** The Lambda-first foundation and manual OIDC ZIP deployment are merged. The origin requires both a dedicated Worker bearer and a cryptographically verified Cloudflare Access JWT. Public AWS and Cloudflare activation remain separate, manually gated operations; this repository change does not run them.
 
 ## Design and zero-cost target
 
 ```text
 ChatGPT custom MCP connector
   -> Cloudflare Access Managed OAuth (central configuration: windsor-app)
-  -> future authenticated HTTPS forwarding (to be designed/tested)
+  -> Cloudflare Worker adds a dedicated origin bearer and forwards the signed Access JWT
   -> AWS Lambda Function URL, native Python 3.12 ZIP handler (buffered JSON)
   -> pinned upstream FastMCP tools and cookidoo-api
   -> Cookidoo
 ```
 
-There are **no containers**, ECR, Docker builds, running VMs, SQS polling, DynamoDB tables, provisioned concurrency, NAT gateways, API Gateway or AWS Secrets Manager charges. The planned release uses an existing regional S3 deployment bucket for the ZIP. The Lambda Function URL is **disabled by default**; a signed `Cf-Access-Jwt-Assertion` is cryptographically verified on *every MCP request*, including those sent directly to its raw AWS URL. `/health` is also JWT-protected, and reveals no account information.
+There are **no containers**, ECR, Docker builds, running VMs, SQS polling, DynamoDB tables, provisioned concurrency, NAT gateways, API Gateway or AWS Secrets Manager charges. The planned release uses an existing regional S3 deployment bucket for the ZIP. The Lambda Function URL is **disabled by default**; once activated, every request requires the SSM-backed origin bearer and a cryptographically verified `Cf-Access-Jwt-Assertion`, including direct calls to the raw AWS URL. `/health` is also protected and reveals no account information.
 
 **£0/month is a target, not a contractual guarantee:** free allowances are shared with other workloads. Lambda duration/requests, CloudWatch Logs, S3 storage and data transfer can incur usage costs. Choose SSM **standard** SecureString parameters under standard throughput and the AWS-managed KMS key to avoid fixed secret-store charges. Do not enable advanced parameters, provisioned concurrency, a NAT gateway or other resources with fixed charges.
 
-The native Lambda handler in `src/lambda_handler.py` uses Mangum and FastMCP's `stateless_http=True, json_response=True`. It intentionally buffers JSON responses rather than opening long-lived SSE connections. The real ChatGPT client must be tested for protocol compatibility before production activation; if stateless JSON fails, investigate alternative adapters/hosting rather than assuming all FastMCP transports work on Lambda.
+The Lambda checks the Worker bearer against AWS SSM Standard SecureString using a constant-time comparison, then independently validates the Access JWT. Missing/unavailable secrets, missing bearer, and invalid JWT all fail closed. The secret is cached per warm Lambda environment; rotate it by provisioning the new value and deploying/recycling the Lambda before updating the Worker secret. The Worker secret and SSM value must be identical and must never be placed in tracked configuration. The native handler uses Mangum and FastMCP's `stateless_http=True, json_response=True`.
 
 ### Read-only first
 
@@ -44,7 +44,7 @@ The script fetches the **pinned** upstream commit, exports its locked dependenci
 
 - `CodeBucket` and `CodeKey`: a same-region, existing S3 object containing the Lambda ZIP.
 - `CloudflareTeamDomain` and `CloudflareAudience`: the Access issuer and application audience (not a secret).
-- Two existing Standard SecureString SSM parameters `/cookidoo-mcp/email` and `/cookidoo-mcp/password`; the function's role may read **only** these parameters.
+- Three Standard SecureString SSM parameters `/cookidoo-mcp/email`, `/cookidoo-mcp/password`, and `/cookidoo-mcp/origin-bearer`; the function role may read only these exact parameters.
 - `EnableFunctionUrl=false` (default): no public HTTP origin is provisioned. Do not turn it on until Cloudflare routing, JWT verification, native MCP JSON-RPC and account logins are demonstrated end-to-end.
 
 Lambda: Python 3.12, 512 MB, 30-second timeout, reserved concurrency 2, seven-day log retention. The deployment uses an **existing S3 code bucket**, rather than an ECR image repository. The separate GitHub OIDC bootstrap and manually gated release workflow are in `infrastructure/bootstrap-github.yaml` and `.github/workflows/deploy.yml`. Merge and review those before running either action.
@@ -53,14 +53,16 @@ Lambda: Python 3.12, 512 MB, 30-second timeout, reserved concurrency 2, seven-da
 
 1. Native Lambda Function URL JSON-RPC initialise, tools/list, tools/call compatibility.
 2. Real UK TM7 account login after cold start, expiry/retry and concurrency tests.
-3. Run the **one-time manual GitHub OIDC bootstrap**, then use the `deploy.yml` workflow's explicit confirmation to deploy the **private** Lambda; Function URL stays **disabled**.
-4. Secure Cloudflare Access Managed OAuth routing and raw AWS origin bypass tests.
-5. Profile free-tier consumption/shared budgets to avoid unexpected AWS charges.
-6. Later explicit write-approval controls and disposable test custom recipe.
+3. Configure the same high-entropy `COOKIDOO_ORIGIN_BEARER` GitHub Actions secret in both repositories. Never place it in variables, workflow inputs, command-line arguments or logs.
+4. Run the manual GitHub OIDC bootstrap, provision the token to SSM with `provision-origin-bearer.yml`, then deploy the **private** Lambda with `deploy.yml`.
+5. After auth tests pass, separately activate the AWS Function URL. Verify missing credentials and either credential alone return 403 while Worker forwarding stays disabled.
+6. Stage the disabled Worker, then separately activate forwarding after direct-origin checks and real ChatGPT OAuth/MCP tests are reviewed.
+7. Profile free-tier consumption/shared budgets to avoid unexpected AWS charges.
+8. Later explicit write-approval controls and disposable test custom recipe.
 
 Full plan: [issue #1](https://github.com/antonio1000homens/cookidoo-mcp/issues/1).
 
-## GitHub OIDC deployment (manual, private-only)
+## GitHub OIDC deployment (manual, separately gated activation)
 
 The deployment pipeline mirrors the per-application ownership in [rsvp](https://github.com/antonio1000homens/rsvp), but **never automatically deploys on push/merge**. It uses the existing regional S3 bucket, creates **no** Docker/ECR repository, paid secret store, database, queue, NAT gateway, or provisioned concurrency.
 
@@ -79,7 +81,7 @@ The bootstrap also creates/updates the `production` GitHub environment, restrict
 
 You must separately supply `CF_ACCESS_TEAM_DOMAIN` (e.g. `https://myteam.cloudflareaccess.com`) and `CF_ACCESS_AUD` (the Cookidoo Access application audience) as `production` environment variables. Neither is a password. **No Cloudflare application or route is created by this workflow.**
 
-Provision `/cookidoo-mcp/email` and `/cookidoo-mcp/password` in SSM Parameter Store in the same AWS account/region as **Standard SecureString**, encrypted with the AWS-managed default `alias/aws/ssm` key. Use the AWS Console or another secret-safe mechanism; **do not** paste account credentials into repo, GitHub variables, commands saved in shell history, build logs or issues. The bootstrap does not create or read these secrets.
+Provision `/cookidoo-mcp/email` and `/cookidoo-mcp/password` in SSM Parameter Store in the same AWS account/region as **Standard SecureString**, encrypted with `alias/aws/ssm`. The origin bearer is provisioned separately by the confirmation-gated workflow from the masked GitHub Actions secret. Do not put credentials in tracked files, GitHub variables, command arguments, build logs or issues.
 
 ### 2. Choose the manually dispatched workflow
 
@@ -88,7 +90,7 @@ In **Actions → Validate / deploy Cookidoo MCP ZIP Lambda (manual) → Run work
 - `validate` (default): runs shell/CloudFormation checks, builds the 3.12 ZIP using pinned upstream dependencies and retains a one-day CI artifact. No AWS credentials and no deployment.
 - `deploy`: enter exactly `DEPLOY-PRIVATE-LAMBDA`, satisfy the protected `production` environment gate, and assume the repo-specific IAM role via short-lived OIDC. The same validated ZIP is uploaded to `s3://<CODE_BUCKET>/cookidoo-mcp/<commit SHA>/cookidoo-mcp.zip` (checksummed) and the `cookidoo-mcp` CloudFormation stack is deployed.
 
-The deploy role can write **only** under that S3 prefix and manage **only** the Cookidoo stack. The CloudFormation role can create/update the `cookidoo-mcp` Lambda, its `cookidoo-mcp-execution` IAM role and its log group. **Neither role is allowed to expose a Lambda Function URL**; a separate, security-reviewed change will be required for Cloudflare routing. A post-deploy gate fails if a Function URL exists. No Cookidoo credentials are exposed to GitHub Actions.
+The deploy role can write only under that S3 prefix and manage only the Cookidoo stack. Private deployment keeps the URL disabled and fails if one already exists. The CloudFormation role can manage the Cookidoo Function URL, but activation is available only through a separate confirmation-gated workflow. Cookidoo account credentials are never exposed to GitHub Actions.
 
 This workflow does not enable ChatGPT connectivity yet. The future Cloudflare Access/OAuth integration and live cold-start/login testing must follow in separate reviewed work.
 

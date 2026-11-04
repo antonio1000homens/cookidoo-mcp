@@ -1,13 +1,16 @@
-"""Fail-closed Cloudflare Access authentication for the Lambda HTTP origin.
+"""Fail-closed origin-bearer and Cloudflare Access checks for Lambda HTTP.
 
-This validates the signed Access application JWT, not a caller-supplied identity
-header or unverified cookie. The same check applies even when the Lambda
-Function URL is called directly, bypassing the public Cloudflare hostname.
+Both credentials are required: a dedicated bearer loaded from SSM and the
+signed Access application JWT. The JWT is verified cryptographically, not
+accepted from an identity header or unverified cookie. These checks also apply
+when the Lambda Function URL is called directly.
 """
 from __future__ import annotations
 
 import asyncio
+import hmac
 import os
+import threading
 from urllib.parse import urlparse
 
 import jwt
@@ -62,6 +65,31 @@ class AccessGate:
     def __init__(self, app, verifier: AccessVerifier):
         self.app = app
         self.verifier = verifier
+        self._origin_token = None
+        self._origin_lock = threading.Lock()
+
+    def _expected_origin_token(self) -> str:
+        if self._origin_token is not None:
+            return self._origin_token
+        with self._origin_lock:
+            if self._origin_token is not None:
+                return self._origin_token
+            parameter = os.environ.get("ORIGIN_BEARER_PARAM", "")
+            if not parameter:
+                raise RuntimeError("Origin bearer parameter is not configured")
+            try:
+                import boto3
+
+                response = boto3.client("ssm").get_parameter(
+                    Name=parameter, WithDecryption=True
+                )
+                value = response["Parameter"]["Value"]
+                if not value:
+                    raise ValueError("empty origin token")
+            except Exception:
+                raise RuntimeError("Origin bearer bootstrap failed") from None
+            self._origin_token = value
+            return value
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -79,8 +107,26 @@ class AccessGate:
             )
             return
 
-        # There is no unauthenticated HTTP path, including the health check:
-        # a future raw AWS Function URL must not be callable without Access.
+        # Both independent credentials are required on every path. The bearer
+        # proves the caller is the configured Worker; Access proves user auth.
+        authorization = next(
+            (value.decode("ascii", errors="ignore") for key, value in scope.get("headers", [])
+             if key.lower() == b"authorization"),
+            "",
+        )
+        supplied = authorization[7:] if authorization.startswith("Bearer ") else ""
+        try:
+            expected = await asyncio.to_thread(self._expected_origin_token)
+        except Exception:
+            await self._deny(scope, receive, send)
+            return
+        if not supplied or not hmac.compare_digest(
+            supplied.encode("utf-8"), expected.encode("utf-8")
+        ):
+            await self._deny(scope, receive, send)
+            return
+
+        # No unauthenticated HTTP path, including health.
         token = next(
             (
                 value.decode("ascii", errors="ignore")
