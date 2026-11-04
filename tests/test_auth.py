@@ -27,6 +27,11 @@ class StubOriginGate(AccessGate):
         return "dedicated-origin-token"
 
 
+class UnavailableOriginGate(StubOriginGate):
+    def _expected_origin_token(self):
+        raise RuntimeError("sensitive backend detail")
+
+
 def test_direct_origin_is_fail_closed():
     # Standalone test origin has no ASGI lifespan handler; avoid triggering one.
     client = TestClient(StubOriginGate(origin, StubVerifier()))
@@ -50,6 +55,37 @@ def test_direct_origin_is_fail_closed():
     ok = client.post("/mcp", headers=both)
     assert ok.status_code == 200
     assert ok.text == "origin reached"
+
+
+@pytest.mark.parametrize(
+    ("gate_type", "headers", "stage", "error_type"),
+    [
+        (StubOriginGate, {"Authorization": "Bearer wrong-origin-token"}, "origin_bearer_mismatch", "none"),
+        (UnavailableOriginGate, {}, "origin_bearer_unavailable", "none"),
+        (StubOriginGate, {"Authorization": "Bearer dedicated-origin-token"}, "access_assertion_missing", "none"),
+        (
+            StubOriginGate,
+            {
+                "Authorization": "Bearer dedicated-origin-token",
+                "Cf-Access-Jwt-Assertion": "fake-access-assertion",
+            },
+            "access_jwt_verification_failed",
+            "ValueError",
+        ),
+    ],
+)
+def test_auth_rejection_logs_safe_stage_only(caplog, gate_type, headers, stage, error_type):
+    client = TestClient(gate_type(origin, StubVerifier()))
+    with caplog.at_level("WARNING", logger="src.auth"):
+        response = client.post("/mcp", headers=headers)
+
+    assert response.status_code == 403
+    assert f"stage={stage}" in caplog.text
+    assert f"error_type={error_type}" in caplog.text
+    for secret in ("dedicated-origin-token", "wrong-origin-token", "fake-access-assertion"):
+        assert secret not in caplog.text
+    assert "sensitive backend detail" not in caplog.text
+    assert "invalid" not in caplog.text
 
 
 def test_origin_token_is_loaded_once_from_ssm_securely(monkeypatch):

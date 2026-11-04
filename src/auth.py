@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import logging
 import os
 import threading
 from urllib.parse import urlparse
@@ -16,6 +17,8 @@ from urllib.parse import urlparse
 import jwt
 from jwt import PyJWKClient
 from starlette.responses import PlainTextResponse
+
+logger = logging.getLogger(__name__)
 
 
 class AccessVerifier:
@@ -118,12 +121,12 @@ class AccessGate:
         try:
             expected = await asyncio.to_thread(self._expected_origin_token)
         except Exception:
-            await self._deny(scope, receive, send)
+            await self._deny(scope, receive, send, "origin_bearer_unavailable")
             return
         if not supplied or not hmac.compare_digest(
             supplied.encode("utf-8"), expected.encode("utf-8")
         ):
-            await self._deny(scope, receive, send)
+            await self._deny(scope, receive, send, "origin_bearer_mismatch")
             return
 
         # No unauthenticated HTTP path, including health.
@@ -136,13 +139,20 @@ class AccessGate:
             "",
         )
         if not token:
-            await self._deny(scope, receive, send)
+            await self._deny(scope, receive, send, "access_assertion_missing")
             return
         try:
             await asyncio.to_thread(self.verifier.verify, token)
-        except Exception:
-            # Do not log tokens, decoded claims, passwords or upstream exceptions.
-            await self._deny(scope, receive, send)
+        except Exception as error:
+            # Log only the rejection stage and exception class. Never log tokens,
+            # claims, credentials, or exception messages.
+            await self._deny(
+                scope,
+                receive,
+                send,
+                "access_jwt_verification_failed",
+                error_type=type(error).__name__,
+            )
             return
         if path == "/health":
             await PlainTextResponse("ok", headers={"Cache-Control": "no-store"})(
@@ -152,7 +162,12 @@ class AccessGate:
         await self.app(scope, receive, send)
 
     @staticmethod
-    async def _deny(scope, receive, send):
+    async def _deny(scope, receive, send, reason, *, error_type=None):
+        logger.warning(
+            "Cookidoo authentication denied: stage=%s error_type=%s",
+            reason,
+            error_type or "none",
+        )
         await PlainTextResponse(
             "Forbidden", status_code=403, headers={"Cache-Control": "no-store"}
         )(scope, receive, send)
