@@ -1,0 +1,79 @@
+name: Cookidoo MCP - tests and Lambda container smoke
+
+on:
+  pull_request:
+    paths:
+      - src/**
+      - tests/**
+      - infrastructure/**
+      - Dockerfile
+      - requirements-runtime.txt
+      - .github/workflows/ci.yml
+      - .gitignore
+      - README.md
+  push:
+    branches: [master]
+    paths:
+      - src/**
+      - tests/**
+      - infrastructure/**
+      - Dockerfile
+      - requirements-runtime.txt
+      - .github/workflows/ci.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  UPSTREAM_COMMIT: 6f7c33b1d23f8257814fd790341bc84cd88785e0
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Fetch pinned upstream
+        run: |
+          git clone https://github.com/alexandrepa/mcp-cookidoo.git /tmp/cookidoo-upstream
+          git -C /tmp/cookidoo-upstream checkout --detach "$UPSTREAM_COMMIT"
+          test "$(git -C /tmp/cookidoo-upstream rev-parse HEAD)" = "$UPSTREAM_COMMIT"
+      - name: Install pinned upstream and test dependencies
+        run: |
+          cd /tmp/cookidoo-upstream
+          uv sync --locked --no-dev
+          uv pip install --python .venv/bin/python -r "$GITHUB_WORKSPACE/requirements-runtime.txt"
+          uv pip install --python .venv/bin/python pytest==8.3.5 pytest-asyncio==0.26.0 httpx==0.28.1
+      - name: Unit tests
+        run: |
+          export PYTHONPATH="$GITHUB_WORKSPACE:/tmp/cookidoo-upstream"
+          /tmp/cookidoo-upstream/.venv/bin/python -m pytest -q tests
+          /tmp/cookidoo-upstream/.venv/bin/python -m compileall -q src
+      - name: CloudFormation lint
+        run: |
+          uvx cfn-lint infrastructure/cookidoo.yaml
+
+  container-smoke:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Lambda image
+        run: docker build --pull -t cookidoo-mcp:ci .
+      - name: Anonymous origin denied; health still works
+        run: |
+          docker run -d --name cookidoo-mcp-ci -p 18080:8080 \
+            -e CF_ACCESS_TEAM_DOMAIN=https://ci.cloudflareaccess.com \
+            -e CF_ACCESS_AUD=ci-aud cookidoo-mcp:ci
+          trap 'docker rm -f cookidoo-mcp-ci >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 40); do
+            if curl -sf http://localhost:18080/health >/dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS http://localhost:18080/health
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:18080/mcp)
+          test "$code" = 403
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Cf-Access-Jwt-Assertion: forged' http://localhost:18080/mcp)
+          test "$code" = 403

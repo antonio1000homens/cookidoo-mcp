@@ -1,0 +1,5 @@
+# Additional dependencies on top of upstream's pinned uv.lock.
+# Pin direct runtime versions; follow up by freezing the complete combined dependency graph.
+boto3==1.40.0
+PyJWT[crypto]==2.10.1
+uvicorn==0.35.0
