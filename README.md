@@ -1,86 +1,61 @@
-# Cookidoo MCP — TM7 (Lambda-first)
+# Cookidoo MCP — Thermomix TM7 (native AWS Lambda ZIP)
 
-Standalone public infrastructure/application repository for an **unofficial** Cookidoo integration. The server is a thin deployment/security layer over [alexandrepa/mcp-cookidoo](https://github.com/alexandrepa/mcp-cookidoo) pinned to upstream commit `6f7c33b1d23f8257814fd790341bc84cd88785e0` (release v1.1.0). No passwords, sessions or personal recipes belong in this repository.
+Standalone public infrastructure/application repository for an **unofficial** Cookidoo integration. Python runtime uses upstream [alexandrepa/mcp-cookidoo](https://github.com/alexandrepa/mcp-cookidoo) pinned at commit `6f7c33b1d23f8257814fd790341bc84cd88785e0` (v1.1.0). Do not commit passwords, cookies, tokens or personal recipes.
 
-**Current status: implementation spike, not yet deployed.** This branch introduces read-only Streamable HTTP transport, a signed Cloudflare Access JWT gate, Lambda Web Adapter image and a CloudFormation template. See [issue #1](https://github.com/antonio1000homens/cookidoo-mcp/issues/1).
+**Status:** Lambda-first feasibility spike merged in [PR #2](https://github.com/antonio1000homens/cookidoo-mcp/pull/2). The next PR converts its container packaging to an ordinary Python ZIP Lambda using [Mangum](https://pypi.org/project/mangum/). **Nothing has been deployed to AWS.**
 
-## Architecture
+## Design and zero-cost target
 
 ```text
-ChatGPT custom MCP client
-  -> Cloudflare Access Managed OAuth (windsor-app owns Access application/zone)
-  -> secure origin mapping (NOT YET CONFIGURED)
-  -> Lambda Function URL / streaming Web Adapter
-  -> Python FastMCP, stateless HTTP at /mcp
-  -> Cookidoo HTTPS via pinned upstream Python library
+ChatGPT custom MCP connector
+  -> Cloudflare Access Managed OAuth (central configuration: windsor-app)
+  -> future authenticated HTTPS forwarding (to be designed/tested)
+  -> AWS Lambda Function URL, native Python 3.12 ZIP handler (buffered JSON)
+  -> pinned upstream FastMCP tools and cookidoo-api
+  -> Cookidoo
 ```
 
-The application requires a **cryptographically validated** `Cf-Access-Jwt-Assertion` on all MCP methods, including requests sent directly to AWS. JWT signature (Cloudflare JWKS), issuer, audience and expiry are checked. `GET /health` is deliberately minimal and public solely for Lambda Web Adapter readiness; other paths return 404. **A Cloudflare Access login alone does not protect a public AWS Function URL.** Direct-origin bypass tests must pass before enabling it.
+There are **no containers**, ECR, Docker builds, running VMs, SQS polling, DynamoDB tables, provisioned concurrency, NAT gateways, API Gateway or AWS Secrets Manager charges. The planned release uses an existing regional S3 deployment bucket for the ZIP. The Lambda Function URL is **disabled by default**; a signed `Cf-Access-Jwt-Assertion` is cryptographically verified on *every MCP request*, including those sent directly to its raw AWS URL. `/health` reveals no account information.
+
+**£0/month is a target, not a contractual guarantee:** free allowances are shared with other workloads. Lambda duration/requests, CloudWatch Logs, S3 storage and data transfer can incur usage costs. Choose SSM **standard** SecureString parameters under standard throughput and the AWS-managed KMS key to avoid fixed secret-store charges. Do not enable advanced parameters, provisioned concurrency, a NAT gateway or other resources with fixed charges.
+
+The native Lambda handler in `src/lambda_handler.py` uses Mangum and FastMCP's `stateless_http=True, json_response=True`. It intentionally buffers JSON responses rather than opening long-lived SSE connections. The real ChatGPT client must be tested for protocol compatibility before production activation; if stateless JSON fails, investigate alternative adapters/hosting rather than assuming all FastMCP transports work on Lambda.
 
 ### Read-only first
 
-The adapter explicitly registers only:
+Only `search_recipes`, `get_recipe_details`, `list_custom_recipes`, `get_custom_recipe` and `generate_recipe_structure` are registered. There is **no** `connect_to_cookidoo` (which exposes account email), `upload_custom_recipe`, or `update_custom_recipe` tool. Custom recipe writes require additional explicit, server-enforced safeguards and approval in a later PR.
 
-- `search_recipes`, `get_recipe_details`
-- `list_custom_recipes`, `get_custom_recipe`
-- `generate_recipe_structure` (validation/preview, no upload)
+Defaults are `COOKIDOO_COUNTRY=gb`, `COOKIDOO_LANGUAGE=en-GB` and `COOKIDOO_DEVICE=TM7`.
 
-It does **not** register `connect_to_cookidoo` (which reports the account email), `upload_custom_recipe`, or `update_custom_recipe`. Upstream prompt guidance about seeking user approval is not a server-side security control. Mutation tools will need a separate deliberate approval/authorization design and a later PR.
+## ZIP build / offline tests
 
-Defaults are `COOKIDOO_COUNTRY=gb`, `COOKIDOO_LANGUAGE=en-GB`, and `COOKIDOO_DEVICE=TM7`.
-
-## Local / CI
-
-The Dockerfile copies the Lambda Web Adapter from AWS's published image, but the same Python ASGI process can run locally without Lambda. Build:
+Prerequisites: Git, [uv](https://docs.astral.sh/uv/), ZIP and Python 3.12. Use Linux x86_64 for native dependency wheel compatibility with AWS Lambda.
 
 ```bash
-docker build -t cookidoo-mcp .
+bash scripts/build-zip.sh
+unzip -l dist/cookidoo-mcp.zip | head
 ```
 
-The server requires `CF_ACCESS_TEAM_DOMAIN=https://YOUR-TEAM.cloudflareaccess.com` and `CF_ACCESS_AUD=YOUR_APPLICATION_AUD`. It **fails at startup** if these are missing or invalid. For local development only, `COOKIDOO_ALLOW_LOCAL_ENV=1` permits credentials from environment variables; production never enables this override. Do not commit or print credential values.
+The script fetches the **pinned** upstream commit, exports its locked dependencies, installs Mangum plus the existing SSM/JWT libraries, and packages the normal `src.lambda_handler.handler` Lambda entry point. It does not log in to Cookidoo or contact AWS. The GitHub CI builds a ZIP and runs offline unit tests. Existing live Cookidoo credentials must never appear in GitHub tests or actions logs.
 
-```bash
-docker run --rm -p 8080:8080 \
-  -e CF_ACCESS_TEAM_DOMAIN=https://YOUR-TEAM.cloudflareaccess.com \
-  -e CF_ACCESS_AUD=YOUR_APPLICATION_AUD \
-  -e COOKIDOO_ALLOW_LOCAL_ENV=1 \
-  -e COOKIDOO_EMAIL -e COOKIDOO_PASSWORD cookidoo-mcp
-curl -i http://localhost:8080/health   # 200 ok
-curl -i -X POST http://localhost:8080/mcp   # 403 without a valid JWT
-```
+## CloudFormation deployment
 
-CI fetches the pinned upstream commit, runs offline/mocked Python tests, CloudFormation lint and builds a Docker container to test the anonymous-origin denial. It does **not** access your Cookidoo account or AWS.
+`infrastructure/cookidoo.yaml` is a ZIP-based Lambda template. It requires:
 
-## Lambda configuration
+- `CodeBucket` and `CodeKey`: a same-region, existing S3 object containing the Lambda ZIP.
+- `CloudflareTeamDomain` and `CloudflareAudience`: the Access issuer and application audience (not a secret).
+- Two existing Standard SecureString SSM parameters `/cookidoo-mcp/email` and `/cookidoo-mcp/password`; the function's role may read **only** these parameters.
+- `EnableFunctionUrl=false` (default): no public HTTP origin is provisioned. Do not turn it on until Cloudflare routing, JWT verification, native MCP JSON-RPC and account logins are demonstrated end-to-end.
 
-`infrastructure/cookidoo.yaml` defines:
+Lambda: Python 3.12, 512 MB, 30-second timeout, reserved concurrency 2, seven-day log retention. The deployment uses an **existing S3 code bucket**, rather than an ECR image repository. Role/bootstrap and release automation will be added through a separate, manually gated GitHub OIDC workflow analogous to `rsvp`.
 
-- One Python-container Lambda (x86_64, memory 512 MB, 30s timeout, reserved concurrency 2).
-- Response-streaming Lambda Web Adapter / matching Function URL mode.
-- Least-privilege `ssm:GetParameters` for **two** pre-existing encrypted SSM SecureString parameters, default `/cookidoo-mcp/email` and `/cookidoo-mcp/password`.
-- Cloudflare Access team issuer and Application AUD configuration (**not** the Cloudflare API token).
-- Seven-day CloudWatch log retention.
-- **`EnableFunctionUrl=false` by default**. An AWS origin is not publicly reachable until explicitly activated.
+## Remaining implementation gates
 
-For now, provision secret values separately via an appropriate secure channel (do not store their plaintext in CloudFormation, GitHub Actions variables/logs, README or CLI command history). The runtime retrieves and caches them in the warm process. Rotating a secret requires recycling warm Lambda execution environments; a supported rotation procedure is future work.
+1. Native Lambda Function URL JSON-RPC initialise, tools/list, tools/call compatibility.
+2. Real UK TM7 account login after cold start, expiry/retry and concurrency tests.
+3. GitHub OIDC role + restricted CloudFormation service role and manual deployment with **Function URL disabled**.
+4. Secure Cloudflare Access Managed OAuth routing and raw AWS origin bypass tests.
+5. Profile free-tier consumption/shared budgets to avoid unexpected AWS charges.
+6. Later explicit write-approval controls and disposable test custom recipe.
 
-A first manual deployment would build the image, push it to ECR in the Lambda's AWS region, and deploy the CloudFormation template with `ImageUri`, `CloudflareTeamDomain`, and `CloudflareAudience` supplied as **configuration values**. It must be reviewed and gated; there is intentionally **no automatic deployment** yet, no OIDC deployment role and no public Function URL until end-to-end validation.
-
-## Outstanding gates before production
-
-1. Verify upstream license distribution terms (upstream `pyproject.toml` declares MIT; verify a separate LICENSE file/author confirmation before copying code).
-2. Confirm a real Cloudflare Access Managed OAuth app, OAuth metadata routes and secure forwarding to a Lambda origin; `windsor-app` owns shared Access/Terraform configuration.
-3. Run **real** authenticated MCP initialize, tools/list and tools/call against a Lambda Function URL (CI tests the local transport/auth gate, not Lambda).
-4. Measure Cookidoo cold starts, repeated logins, MFA, API limits and response streaming with UK account/TM7.
-5. Investigate production session lifecycle/secret rotation, full dependency lock/digest pinning, audit and concurrency guardrails.
-6. Test guided cooking on a disposable custom recipe with explicit approval before exposing write tools.
-
-If Lambda proves unsuitable, retain this application/repo and replace the AWS deployment with a one-replica Kubernetes FastMCP service. See the original context in [windsor-app #1997](https://github.com/antonio1000homens/windsor-app/issues/1997).
-
-## References
-
-- [Upstream MCP](https://github.com/alexandrepa/mcp-cookidoo)
-- [Lambda Web Adapter](https://github.com/awslabs/aws-lambda-web-adapter)
-- [Cloudflare signed Access JWT validation](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/)
-- [Lambda Function URL response streaming](https://docs.aws.amazon.com/lambda/latest/dg/config-rs-invoke-furls.html)
-- Existing deployment conventions: [NFC](https://github.com/antonio1000homens/nfc) / [RSVP](https://github.com/antonio1000homens/rsvp)
+Full plan: [issue #1](https://github.com/antonio1000homens/cookidoo-mcp/issues/1).

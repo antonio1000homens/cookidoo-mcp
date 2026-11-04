@@ -1,5 +1,4 @@
-# Additional dependencies on top of upstream's pinned uv.lock.
-# Pin direct runtime versions; follow up by freezing the complete combined dependency graph.
+# Additional Lambda-only dependencies beyond the pinned upstream v1.1.0 uv.lock.
+# Upstream already pins PyJWT and its cryptography transitive dependencies.
 boto3==1.40.0
-PyJWT[crypto]==2.10.1
-uvicorn==0.35.0
+mangum==0.22.0

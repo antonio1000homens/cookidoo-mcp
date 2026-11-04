@@ -1,4 +1,4 @@
-name: Cookidoo MCP - tests and Lambda container smoke
+name: Cookidoo MCP - tests and ZIP Lambda smoke
 
 on:
   pull_request:
@@ -6,7 +6,7 @@ on:
       - src/**
       - tests/**
       - infrastructure/**
-      - Dockerfile
+      - scripts/**
       - requirements-runtime.txt
       - .github/workflows/ci.yml
       - .gitignore
@@ -17,7 +17,7 @@ on:
       - src/**
       - tests/**
       - infrastructure/**
-      - Dockerfile
+      - scripts/**
       - requirements-runtime.txt
       - .github/workflows/ci.yml
   workflow_dispatch:
@@ -52,28 +52,18 @@ jobs:
           /tmp/cookidoo-upstream/.venv/bin/python -m compileall -q src
       - name: CloudFormation lint
         run: |
-          uvx cfn-lint infrastructure/cookidoo.yaml
+          uvx --from cfn-lint==1.53.3 cfn-lint infrastructure/cookidoo.yaml
 
-  container-smoke:
+  zip-smoke:
     runs-on: ubuntu-latest
     needs: test
     steps:
       - uses: actions/checkout@v4
-      - name: Build Lambda image
-        run: docker build --pull -t cookidoo-mcp:ci .
-      - name: Anonymous origin denied; health still works
+      - uses: astral-sh/setup-uv@v6
+      - name: Build standalone Lambda ZIP without Docker or ECR
+        run: bash scripts/build-zip.sh
+      - name: Check Lambda deployment package
         run: |
-          docker run -d --name cookidoo-mcp-ci -p 18080:8080 \
-            -e CF_ACCESS_TEAM_DOMAIN=https://ci.cloudflareaccess.com \
-            -e CF_ACCESS_AUD=ci-aud cookidoo-mcp:ci
-          trap 'docker rm -f cookidoo-mcp-ci >/dev/null 2>&1 || true' EXIT
-          for attempt in $(seq 1 40); do
-            if curl -sf http://localhost:18080/health >/dev/null; then break; fi
-            sleep 1
-          done
-          curl -fsS http://localhost:18080/health
-          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:18080/mcp)
-          test "$code" = 403
-          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
-            -H 'Cf-Access-Jwt-Assertion: forged' http://localhost:18080/mcp)
-          test "$code" = 403
+          set -euo pipefail
+          test -s dist/cookidoo-mcp.zip
+          unzip -l dist/cookidoo-mcp.zip | grep -E 'src/lambda_handler.py|server.py|mangum/'
