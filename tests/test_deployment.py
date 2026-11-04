@@ -1,5 +1,6 @@
 """Deployment controls must be reviewed and offline-testable without AWS accounts."""
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -62,3 +63,12 @@ def test_bootstrap_does_not_create_per_request_billed_services():
     assert "Type: AWS::ECR::Repository" not in bootstrap
     assert "Type: AWS::Lambda::Function" not in bootstrap
     assert "Type: AWS::DynamoDB::Table" not in bootstrap
+
+
+def test_action_commit_pins_use_full_40_character_sha():
+    """GitHub Actions rejects abbreviated commit SHA refs before jobs start."""
+    for workflow_path in (".github/workflows/deploy.yml", ".github/workflows/ci.yml"):
+        workflow = load(workflow_path)
+        for action, ref in re.findall(r"^\\s*(?:-\\s*)?uses:\\s+([^@\\s]+)@([^\\s#]+)", workflow, re.MULTILINE):
+            if re.fullmatch(r"[0-9a-f]+", ref):
+                assert len(ref) == 40, f"{workflow_path}: {action}@{ref} is not a full SHA"

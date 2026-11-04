@@ -50,7 +50,7 @@ jobs:
           unzip -l dist/cookidoo-mcp.zip | grep -q 'src/lambda_handler.py'
           unzip -l dist/cookidoo-mcp.zip | grep -q 'mangum/'
       - name: Retain the exact validated ZIP for the deploy job
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: cookidoo-mcp-zip
           path: dist/cookidoo-mcp.zip
