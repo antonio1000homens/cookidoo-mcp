@@ -1,0 +1,138 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Cookidoo MCP Lambda read-only proof of concept. Public Function URL is
+  deliberately disabled by default. A signed Cloudflare Access JWT must be
+  validated by the application for every MCP request.
+
+Parameters:
+  ImageUri:
+    Type: String
+    Description: Immutable, same-region ECR image URI (prefer @sha256 digest).
+    AllowedPattern: '^.+\.dkr\.ecr\..+\.amazonaws\.com/.+'
+  FunctionName:
+    Type: String
+    Default: cookidoo-mcp
+  EmailParameterName:
+    Type: String
+    Default: /cookidoo-mcp/email
+    AllowedPattern: '^/[a-zA-Z0-9_.\-/]+$'
+  PasswordParameterName:
+    Type: String
+    Default: /cookidoo-mcp/password
+    AllowedPattern: '^/[a-zA-Z0-9_.\-/]+$'
+  CloudflareTeamDomain:
+    Type: String
+    Description: Example https://my-team.cloudflareaccess.com
+    AllowedPattern: '^https://[a-zA-Z0-9.-]+\.cloudflareaccess\.com$'
+  CloudflareAudience:
+    Type: String
+    Description: Application AUD tag from Cloudflare Access (not a secret).
+    MinLength: 1
+  EnableFunctionUrl:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+    Description: >
+      Do not enable before validating real origin JWT enforcement,
+      resource-root OAuth routing and Cloudflare ingress.
+
+Conditions:
+  PublishFunctionUrl: !Equals [!Ref EnableFunctionUrl, 'true']
+
+Resources:
+  CookidooLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${FunctionName}
+      RetentionInDays: 7
+
+  CookidooRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ReadOnlyCookidooParameters
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ssm:GetParameters
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${EmailParameterName}
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${PasswordParameterName}
+        - PolicyName: WriteOwnLogsOnly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub ${CookidooLogGroup.Arn}:*
+
+  CookidooFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref FunctionName
+      PackageType: Image
+      Architectures: [x86_64]
+      Code:
+        ImageUri: !Ref ImageUri
+      Role: !GetAtt CookidooRole.Arn
+      Timeout: 30
+      MemorySize: 512
+      ReservedConcurrentExecutions: 2
+      Environment:
+        Variables:
+          AWS_LWA_PORT: '8080'
+          AWS_LWA_INVOKE_MODE: response_stream
+          AWS_LWA_READINESS_CHECK_PATH: /health
+          COOKIDOO_COUNTRY: gb
+          COOKIDOO_LANGUAGE: en-GB
+          COOKIDOO_DEVICE: TM7
+          COOKIDOO_EMAIL_PARAM: !Ref EmailParameterName
+          COOKIDOO_PASSWORD_PARAM: !Ref PasswordParameterName
+          CF_ACCESS_TEAM_DOMAIN: !Ref CloudflareTeamDomain
+          CF_ACCESS_AUD: !Ref CloudflareAudience
+
+  CookidooFunctionUrl:
+    Type: AWS::Lambda::Url
+    Condition: PublishFunctionUrl
+    Properties:
+      TargetFunctionArn: !Ref CookidooFunction
+      AuthType: NONE
+      InvokeMode: RESPONSE_STREAM
+
+  AllowFunctionUrl:
+    Type: AWS::Lambda::Permission
+    Condition: PublishFunctionUrl
+    Properties:
+      FunctionName: !Ref CookidooFunction
+      Principal: '*'
+      Action: lambda:InvokeFunctionUrl
+      FunctionUrlAuthType: NONE
+
+  AllowFunctionUrlInvocation:
+    Type: AWS::Lambda::Permission
+    Condition: PublishFunctionUrl
+    Properties:
+      FunctionName: !Ref CookidooFunction
+      Principal: '*'
+      Action: lambda:InvokeFunction
+      InvokedViaFunctionUrl: true
+
+Outputs:
+  FunctionArn:
+    Value: !GetAtt CookidooFunction.Arn
+  FunctionUrl:
+    Condition: PublishFunctionUrl
+    Description: >
+      Raw origin URL. Never publish/distribute this URL to end users; it
+      rejects all requests without a valid Cloudflare Access application JWT.
+    Value: !GetAtt CookidooFunctionUrl.FunctionUrl
