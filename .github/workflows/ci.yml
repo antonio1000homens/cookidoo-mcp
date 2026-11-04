@@ -10,7 +10,6 @@ on:
       - requirements-runtime.txt
       - .github/workflows/ci.yml
       - .github/workflows/deploy.yml
-      - .github/workflows/provision-origin-bearer.yml
       - .github/workflows/activate-function-url.yml
       - .gitignore
       - README.md
@@ -24,7 +23,6 @@ on:
       - requirements-runtime.txt
       - .github/workflows/ci.yml
       - .github/workflows/deploy.yml
-      - .github/workflows/provision-origin-bearer.yml
       - .github/workflows/activate-function-url.yml
   workflow_dispatch:
 

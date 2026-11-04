@@ -53,12 +53,13 @@ Lambda: Python 3.12, 512 MB, 30-second timeout, reserved concurrency 2, seven-da
 
 1. Native Lambda Function URL JSON-RPC initialise, tools/list, tools/call compatibility.
 2. Real UK TM7 account login after cold start, expiry/retry and concurrency tests.
-3. Configure the same high-entropy `COOKIDOO_ORIGIN_BEARER` GitHub Actions secret in both repositories. Never place it in variables, workflow inputs, command-line arguments or logs.
-4. Run the manual GitHub OIDC bootstrap, provision the token to SSM with `provision-origin-bearer.yml`, then deploy the **private** Lambda with `deploy.yml`.
-5. After auth tests pass, separately activate the AWS Function URL. Verify missing credentials and either credential alone return 403 while Worker forwarding stays disabled.
-6. Stage the disabled Worker, then separately activate forwarding after direct-origin checks and real ChatGPT OAuth/MCP tests are reviewed.
-7. Profile free-tier consumption/shared budgets to avoid unexpected AWS charges.
-8. Later explicit write-approval controls and disposable test custom recipe.
+3. After merging the Windsor PR, stage the disabled Worker.
+4. Run `scripts/cookidoo-origin-bootstrap.sh` from the Windsor app checkout to generate one bearer and install it in SSM and the Worker secret. It does not activate either endpoint.
+5. Run the manual GitHub OIDC bootstrap if needed, then deploy the **private** Lambda with `deploy.yml`.
+6. After auth tests pass, separately activate the AWS Function URL. Verify requests without credentials and with either credential alone return 403 while Worker forwarding stays disabled.
+7. Separately activate Worker forwarding after direct-origin checks and real ChatGPT OAuth/MCP tests are reviewed.
+8. Profile free-tier consumption/shared budgets to avoid unexpected AWS charges.
+9. Later explicit write-approval controls and disposable test custom recipe.
 
 Full plan: [issue #1](https://github.com/antonio1000homens/cookidoo-mcp/issues/1).
 
@@ -81,7 +82,7 @@ The bootstrap also creates/updates the `production` GitHub environment, restrict
 
 You must separately supply `CF_ACCESS_TEAM_DOMAIN` (e.g. `https://myteam.cloudflareaccess.com`) and `CF_ACCESS_AUD` (the Cookidoo Access application audience) as `production` environment variables. Neither is a password. **No Cloudflare application or route is created by this workflow.**
 
-Provision `/cookidoo-mcp/email` and `/cookidoo-mcp/password` in SSM Parameter Store in the same AWS account/region as **Standard SecureString**, encrypted with `alias/aws/ssm`. The origin bearer is provisioned separately by the confirmation-gated workflow from the masked GitHub Actions secret. Do not put credentials in tracked files, GitHub variables, command arguments, build logs or issues.
+Provision `/cookidoo-mcp/email` and `/cookidoo-mcp/password` in SSM Parameter Store in the same AWS account/region as **Standard SecureString**, encrypted with `alias/aws/ssm`. The origin bearer is provisioned by the Windsor terminal bootstrap script; do not put credentials in tracked files, GitHub variables, command arguments, build logs or issues.
 
 ### 2. Choose the manually dispatched workflow
 

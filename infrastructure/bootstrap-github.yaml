@@ -142,10 +142,6 @@ Resources:
                 Effect: Allow
                 Action: s3:GetBucketLocation
                 Resource: !Sub arn:${AWS::Partition}:s3:::${CodeBucket}
-              - Sid: WriteOnlyCookidooOriginBearer
-                Effect: Allow
-                Action: ssm:PutParameter
-                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cookidoo-mcp/origin-bearer
               - Sid: ManageOnlyCookidooMcpStack
                 Effect: Allow
                 Action:
