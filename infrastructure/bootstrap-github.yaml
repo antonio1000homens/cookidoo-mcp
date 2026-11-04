@@ -132,13 +132,6 @@ Resources:
                 Effect: Allow
                 Action: s3:GetBucketLocation
                 Resource: !Sub arn:${AWS::Partition}:s3:::${CodeBucket}
-              - Sid: ListOnlyCookidooArtifactPrefix
-                Effect: Allow
-                Action: s3:ListBucket
-                Resource: !Sub arn:${AWS::Partition}:s3:::${CodeBucket}
-                Condition:
-                  StringLike:
-                    s3:prefix: cookidoo-mcp/*
               - Sid: ManageOnlyCookidooMcpStack
                 Effect: Allow
                 Action:

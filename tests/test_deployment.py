@@ -52,6 +52,7 @@ def test_deployment_is_manual_and_reuses_tested_build():
     assert "inputs.confirmation == 'DEPLOY-PRIVATE-LAMBDA'" in workflow
     assert "ECR" not in workflow
     assert "docker build" not in workflow
+    assert "--if-none-match '*'" in load("scripts/deploy-aws.sh")
 
 
 def test_bootstrap_does_not_create_per_request_billed_services():

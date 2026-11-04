@@ -40,24 +40,25 @@ assert_no_function_url() {
 assert_no_function_url
 
 local_digest="$(sha256sum "$zip_path" | awk '{print $1}')"
-if remote_digest="$(aws s3api head-object \
-  --bucket "$code_bucket" --key "$code_key" --region "$region" \
-  --query 'Metadata.sha256' --output text 2>&1)"; then
+# Conditional PUT prevents overwriting a release even if another deploy races.
+# On retry, accept only an existing object with the same checksum metadata.
+if upload_error="$(aws s3api put-object \
+  --region "$region" --bucket "$code_bucket" --key "$code_key" \
+  --body "$zip_path" --server-side-encryption AES256 \
+  --metadata "sha256=$local_digest" --if-none-match '*' 2>&1)"; then
+  :
+elif [[ "$upload_error" == *PreconditionFailed* || "$upload_error" == *"(412)"* ]]; then
+  remote_digest="$(aws s3api head-object \
+    --bucket "$code_bucket" --key "$code_key" --region "$region" \
+    --query 'Metadata.sha256' --output text)"
   [[ "$remote_digest" == "$local_digest" ]] || {
     echo "::error::Existing release ZIP differs from current commit."
     exit 1
   }
-elif [[ "$remote_digest" == *"(404)"* || "$remote_digest" == *"Not Found"* || "$remote_digest" == *"NoSuchKey"* ]]; then
-  # Race-safe upload: never overwrite an artifact previously stored under a commit SHA.
-  aws s3api put-object \
-    --region "$region" --bucket "$code_bucket" --key "$code_key" \
-    --body "$zip_path" --server-side-encryption AES256 \
-    --metadata "sha256=$local_digest" --if-none-match '*' >/dev/null
 else
-  echo "::error::Unable to inspect existing S3 release; refusing to overwrite."
+  echo "::error::Could not store immutable S3 release."
   exit 1
 fi
-
 aws cloudformation validate-template --region "$region" \
   --template-body "file://$root/infrastructure/cookidoo.yaml" >/dev/null
 aws cloudformation deploy \
