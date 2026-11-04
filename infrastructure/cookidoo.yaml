@@ -5,10 +5,12 @@ Description: >
   validated by the application for every MCP request.
 
 Parameters:
-  ImageUri:
+  CodeBucket:
     Type: String
-    Description: Immutable, same-region ECR image URI (prefer @sha256 digest).
-    AllowedPattern: '^.+\.dkr\.ecr\..+\.amazonaws\.com/.+'
+    Description: Existing S3 bucket in the Lambda region for immutable ZIP releases.
+  CodeKey:
+    Type: String
+    Description: Unique Cookidoo MCP build ZIP object key.
   FunctionName:
     Type: String
     Default: cookidoo-mcp
@@ -49,6 +51,7 @@ Resources:
   CookidooRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: cookidoo-mcp-execution
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -80,19 +83,19 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Ref FunctionName
-      PackageType: Image
+      PackageType: Zip
+      Runtime: python3.12
+      Handler: src.lambda_handler.handler
       Architectures: [x86_64]
       Code:
-        ImageUri: !Ref ImageUri
+        S3Bucket: !Ref CodeBucket
+        S3Key: !Ref CodeKey
       Role: !GetAtt CookidooRole.Arn
       Timeout: 30
       MemorySize: 512
       ReservedConcurrentExecutions: 2
       Environment:
         Variables:
-          AWS_LWA_PORT: '8080'
-          AWS_LWA_INVOKE_MODE: response_stream
-          AWS_LWA_READINESS_CHECK_PATH: /health
           COOKIDOO_COUNTRY: gb
           COOKIDOO_LANGUAGE: en-GB
           COOKIDOO_DEVICE: TM7
@@ -107,7 +110,7 @@ Resources:
     Properties:
       TargetFunctionArn: !Ref CookidooFunction
       AuthType: NONE
-      InvokeMode: RESPONSE_STREAM
+      InvokeMode: BUFFERED
 
   AllowFunctionUrl:
     Type: AWS::Lambda::Permission
