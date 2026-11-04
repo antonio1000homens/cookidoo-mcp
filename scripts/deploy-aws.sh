@@ -42,15 +42,20 @@ assert_no_function_url
 local_digest="$(sha256sum "$zip_path" | awk '{print $1}')"
 if remote_digest="$(aws s3api head-object \
   --bucket "$code_bucket" --key "$code_key" --region "$region" \
-  --query 'Metadata.sha256' --output text 2>/dev/null)"; then
+  --query 'Metadata.sha256' --output text 2>&1)"; then
   [[ "$remote_digest" == "$local_digest" ]] || {
     echo "::error::Existing release ZIP differs from current commit."
     exit 1
   }
+elif [[ "$remote_digest" == *"(404)"* || "$remote_digest" == *"Not Found"* || "$remote_digest" == *"NoSuchKey"* ]]; then
+  # Race-safe upload: never overwrite an artifact previously stored under a commit SHA.
+  aws s3api put-object \
+    --region "$region" --bucket "$code_bucket" --key "$code_key" \
+    --body "$zip_path" --server-side-encryption AES256 \
+    --metadata "sha256=$local_digest" --if-none-match '*' >/dev/null
 else
-  aws s3 cp "$zip_path" "s3://$code_bucket/$code_key" \
-    --region "$region" --sse AES256 \
-    --metadata "sha256=$local_digest" --only-show-errors
+  echo "::error::Unable to inspect existing S3 release; refusing to overwrite."
+  exit 1
 fi
 
 aws cloudformation validate-template --region "$region" \
