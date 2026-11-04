@@ -22,14 +22,15 @@ class StubVerifier:
 
 
 def test_direct_origin_is_fail_closed():
-    with TestClient(AccessGate(origin, StubVerifier())) as client:
-        assert client.get("/health").status_code == 200
-        assert client.get("/mcp").status_code == 403
-        assert client.post("/mcp", headers={"Cf-Access-Jwt-Assertion": "fake"}).status_code == 403
-        assert client.get("/other", headers={"Cf-Access-Jwt-Assertion": "signed-access-token"}).status_code == 404
-        ok = client.post("/mcp", headers={"Cf-Access-Jwt-Assertion": "signed-access-token"})
-        assert ok.status_code == 200
-        assert ok.text == "origin reached"
+    # Standalone test origin has no ASGI lifespan handler; avoid triggering one.
+    client = TestClient(AccessGate(origin, StubVerifier()))
+    assert client.get("/health").status_code == 200
+    assert client.get("/mcp").status_code == 403
+    assert client.post("/mcp", headers={"Cf-Access-Jwt-Assertion": "fake"}).status_code == 403
+    assert client.get("/other", headers={"Cf-Access-Jwt-Assertion": "signed-access-token"}).status_code == 404
+    ok = client.post("/mcp", headers={"Cf-Access-Jwt-Assertion": "signed-access-token"})
+    assert ok.status_code == 200
+    assert ok.text == "origin reached"
 
 
 def test_missing_cloudflare_settings_fails_startup(monkeypatch):
