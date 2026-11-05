@@ -1,0 +1,95 @@
+name: Cookidoo recipe tools - manual controlled release
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: 'Install reviewed code with writes disabled, enable recipe creation, or disable it'
+        required: true
+        type: choice
+        options: [deploy-disabled, enable-writes, disable-writes]
+      confirmation:
+        description: 'Type DEPLOY-COOKIDOO-WRITES-DISABLED, ENABLE-COOKIDOO-RECIPE-CREATION, or DISABLE-COOKIDOO-RECIPE-CREATION'
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: cookidoo-mcp-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: >-
+      github.ref == 'refs/heads/master' &&
+      ((inputs.operation == 'deploy-disabled' && inputs.confirmation == 'DEPLOY-COOKIDOO-WRITES-DISABLED') ||
+       (inputs.operation == 'enable-writes' && inputs.confirmation == 'ENABLE-COOKIDOO-RECIPE-CREATION') ||
+       (inputs.operation == 'disable-writes' && inputs.confirmation == 'DISABLE-COOKIDOO-RECIPE-CREATION'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@v6
+      - name: Verify shell script and CloudFormation templates
+        run: |
+          bash -n scripts/release-recipe-tools.sh
+          uvx --from cfn-lint==1.53.3 cfn-lint infrastructure/cookidoo.yaml infrastructure/bootstrap-github.yaml
+      - name: Fetch pinned upstream, install and run offline tests
+        if: inputs.operation != 'disable-writes'
+        run: |
+          set -euo pipefail
+          git clone --quiet https://github.com/alexandrepa/mcp-cookidoo.git /tmp/cookidoo-upstream
+          git -C /tmp/cookidoo-upstream checkout --quiet --detach 6f7c33b1d23f8257814fd790341bc84cd88785e0
+          (
+            cd /tmp/cookidoo-upstream
+            uv sync --locked --no-dev
+            uv pip install --python .venv/bin/python -r "$GITHUB_WORKSPACE/requirements-runtime.txt"
+            uv pip install --python .venv/bin/python pytest==8.3.5 pytest-asyncio==0.26.0 httpx==0.28.1
+          )
+          PYTHONPATH="$GITHUB_WORKSPACE:/tmp/cookidoo-upstream" /tmp/cookidoo-upstream/.venv/bin/python -m pytest -q tests
+      - name: Build immutable Lambda ZIP (writes remain disabled)
+        if: inputs.operation == 'deploy-disabled'
+        run: bash scripts/build-zip.sh
+      - name: Preserve exact validated ZIP for deploy job
+        if: inputs.operation == 'deploy-disabled'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cookidoo-recipe-tools-zip
+          path: dist/cookidoo-mcp.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-2' }}
+      CODE_BUCKET: ${{ vars.CODE_BUCKET }}
+      AWS_CLOUDFORMATION_ROLE_ARN: ${{ vars.AWS_CLOUDFORMATION_ROLE_ARN }}
+      RELEASE_ACTION: ${{ inputs.operation }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Fetch validated ZIP (only for disabled code release)
+        if: inputs.operation == 'deploy-disabled'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: cookidoo-recipe-tools-zip
+          path: dist
+      - name: Verify required deployment variables
+        run: |
+          test -n "$CODE_BUCKET"
+          test -n "$AWS_CLOUDFORMATION_ROLE_ARN"
+      - uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7 # v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: cookidoo-recipe-tools
+      - name: Run reviewed release operation and verify live state
+        run: bash scripts/release-recipe-tools.sh
