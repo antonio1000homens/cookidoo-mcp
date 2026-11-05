@@ -159,7 +159,34 @@ class AccessGate:
                 scope, receive, send
             )
             return
-        await self.app(scope, receive, send)
+        # Observe only transport status and MIME after the request passed
+        # both authentication gates. Never log any header value beyond the
+        # bounded MCP protocol version; never inspect request or response body.
+        async def traced_send(message):
+            if message["type"] == "http.response.start":
+                content_type = next(
+                    (value.decode("ascii", errors="ignore").split(";", 1)[0].lower()
+                     for key, value in message.get("headers", [])
+                     if key.lower() == b"content-type"), ""
+                )
+                mime = content_type if content_type in (
+                    "application/json", "text/event-stream", "text/plain"
+                ) else "other"
+                protocol = next(
+                    (value.decode("ascii", errors="ignore")
+                     for key, value in scope.get("headers", [])
+                     if key.lower() == b"mcp-protocol-version"), ""
+                )
+                if len(protocol) > 16 or not all(c.isdigit() or c == "-" for c in protocol):
+                    protocol = "unspecified"
+                logger.warning(
+                    "Cookidoo MCP transport: method=%s path=%s protocol=%s status=%d mime=%s",
+                    method, path, protocol or "unspecified",
+                    message.get("status", 0), mime,
+                )
+            await send(message)
+
+        await self.app(scope, receive, traced_send)
 
     @staticmethod
     async def _deny(scope, receive, send, reason, *, error_type=None):

@@ -88,3 +88,131 @@ def test_lambda_json_mcp_tools_list_is_read_only(monkeypatch):
     assert "get_recipe_details" in names
     assert "upload_custom_recipe" not in names
     assert "update_custom_recipe" not in names
+
+
+
+def test_lambda_mcp_initialize_and_tool_discovery_with_writes_enabled(monkeypatch):
+    """Real Lambda/Mangum transport, including initialize, notification and tools/list.
+
+    Access credentials are synthetic only; no upstream Cookidoo login or AWS
+    SecureString is read during this offline test.
+    """
+    class StubVerifier:
+        def verify(self, token):
+            if token != "synthetic-test-access-jwt":
+                raise ValueError("Unauthorised")
+
+    monkeypatch.setenv("COOKIDOO_RECIPE_CREATION_ENABLED", "true")
+    monkeypatch.setattr(
+        auth.AccessVerifier,
+        "from_environment",
+        classmethod(lambda cls: StubVerifier()),
+    )
+    monkeypatch.setattr(
+        auth.AccessGate,
+        "_expected_origin_token",
+        lambda _self: "synthetic-test-origin-bearer",
+    )
+
+    import src.lambda_handler as runtime
+    importlib.reload(runtime)
+    headers = {
+        "cf-access-jwt-assertion": "synthetic-test-access-jwt",
+        "authorization": "Bearer synthetic-test-origin-bearer",
+        "accept": "application/json, text/event-stream",
+        "mcp-protocol-version": "2025-06-18",
+    }
+    initialize = runtime.handler(
+        _event(
+            headers=headers,
+            body={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "offline-transport-test", "version": "1.0"},
+                },
+            },
+        ),
+        {},
+    )
+    assert initialize["statusCode"] == 200, initialize
+    init_json = json.loads(initialize["body"])
+    assert init_json["id"] == 1
+    assert "serverInfo" in init_json["result"], initialize
+    assert "protocolVersion" in init_json["result"], initialize
+
+    notification = runtime.handler(
+        _event(
+            headers=headers,
+            body={
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": {},
+            },
+        ),
+        {},
+    )
+    assert notification["statusCode"] in (200, 202, 204), notification
+
+    tools = runtime.handler(
+        _event(
+            headers=headers,
+            body={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        ),
+        {},
+    )
+    assert tools["statusCode"] == 200, tools
+    payload = json.loads(tools["body"])
+    names = {item["name"] for item in payload["result"]["tools"]}
+    assert len(names) == 7, names
+    assert "upload_custom_recipe" in names
+    assert "preview_custom_recipe_upload" in names
+    assert "update_custom_recipe" not in names
+    assert all(
+        isinstance(item.get("inputSchema"), dict)
+        and item["inputSchema"].get("type") == "object"
+        for item in payload["result"]["tools"]
+    )
+
+
+def test_authorized_transport_diagnostics_do_not_log_credentials(monkeypatch, caplog):
+    class StubVerifier:
+        def verify(self, token):
+            return None
+
+    monkeypatch.setenv("COOKIDOO_RECIPE_CREATION_ENABLED", "true")
+    monkeypatch.setattr(
+        auth.AccessVerifier,
+        "from_environment",
+        classmethod(lambda cls: StubVerifier()),
+    )
+    monkeypatch.setattr(
+        auth.AccessGate,
+        "_expected_origin_token",
+        lambda _self: "synthetic-origin-secret-never-log",
+    )
+    import src.lambda_handler as runtime
+    importlib.reload(runtime)
+    with caplog.at_level("WARNING", logger="src.auth"):
+        result = runtime.handler(
+            _event(
+                headers={
+                    "cf-access-jwt-assertion": "synthetic-access-token-never-log",
+                    "authorization": "Bearer synthetic-origin-secret-never-log",
+                    "accept": "application/json, text/event-stream",
+                    "mcp-protocol-version": "2025-06-18",
+                },
+                body={"jsonrpc": "2.0", "id": 99, "method": "tools/list", "params": {}},
+            ),
+            {},
+        )
+    assert result["statusCode"] == 200, result
+    assert "Cookidoo MCP transport: method=POST path=/mcp" in caplog.text
+    assert "status=200" in caplog.text
+    assert "mime=application/json" in caplog.text
+    assert "synthetic-access-token-never-log" not in caplog.text
+    assert "synthetic-origin-secret-never-log" not in caplog.text
+    assert "tools/list" not in caplog.text
