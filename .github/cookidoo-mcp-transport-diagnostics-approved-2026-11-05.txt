@@ -1,0 +1,4 @@
+2026-11-05 one-time user-authorized Cookidoo MCP diagnostics release.
+Purpose: capture safe status/mime from the next authenticated MCP request.
+Rollout disables recipe writes during tested ZIP replacement, then restores the
+original enabled state. Keep original Lambda URL; no Cookidoo writes performed.
