@@ -31,6 +31,39 @@ The existing \`update_custom_recipe\`, deletion and \`connect_to_cookidoo\` rema
 
 Defaults are `COOKIDOO_COUNTRY=gb`, `COOKIDOO_LANGUAGE=en-GB` and `COOKIDOO_DEVICE=TM7`.
 
+## Deploying the merged recipe-creation feature with an active Function URL
+
+The original `deploy.yml` is strictly private-only and **deliberately refuses
+to run when the Lambda already has a Function URL**. Never use it for upgrading
+this already-active origin.
+
+Use [Cookidoo recipe tools - manual controlled release](.github/workflows/release-recipe-tools.yml)
+on `master` instead. The release uses the protected production GitHub
+environment, short-lived AWS OIDC credentials, existing S3 ZIP release bucket
+and CloudFormation stack. It preserves the currently configured Lambda
+Function URL on every run and verifies the unchanged endpoint afterwards.
+
+1. **Deploy reviewed code without enabling recipe creation.** Select
+   `deploy-disabled` and enter `DEPLOY-COOKIDOO-WRITES-DISABLED`.
+   This runs all offline tests and the ZIP build, then updates Lambda with
+   `EnableRecipeCreation=false`. The preview tool becomes available but
+   `upload_custom_recipe` remains absent.
+2. **Separate approval to allow actual uploads.** After a live read-only
+   smoke test and review of one disposable custom recipe, select
+   `enable-writes` and enter `ENABLE-COOKIDOO-RECIPE-CREATION`.
+   The action only succeeds when the deployed ZIP matches the exact
+   reviewed `master` SHA, and it never uploads a recipe itself.
+3. **Emergency disable.** Select `disable-writes` and enter
+   `DISABLE-COOKIDOO-RECIPE-CREATION` to remove the tool again
+   without changing the code or Function URL.
+
+The exact-content SHA-256 confirmation produced by
+`preview_custom_recipe_upload` prevents accidental edits between preview
+and upload; it does **not** prove consent. The client must obtain explicit
+user approval for the entire recipe before calling `upload_custom_recipe`.
+Each title is reserved in the existing release bucket, and ambiguous upload
+failures must be investigated rather than automatically retried.
+
 ## ZIP build / offline tests
 
 Prerequisites: Git, [uv](https://docs.astral.sh/uv/), ZIP and Python 3.12. Use Linux x86_64 for native dependency wheel compatibility with AWS Lambda.

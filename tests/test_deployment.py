@@ -91,3 +91,37 @@ def test_creation_is_disabled_by_default_and_s3_scope_is_explicit():
     deploy = load("scripts/deploy-aws.sh")
     # Normal private deploy must never enable recipe writes unexpectedly.
     assert "EnableRecipeCreation=true" not in deploy
+
+
+def test_active_function_url_release_is_separately_confirmed():
+    workflow = load(".github/workflows/release-recipe-tools.yml")
+    release = load("scripts/release-recipe-tools.sh")
+    assert "workflow_dispatch:" in workflow
+    assert "\n  push:" not in workflow
+    assert "\n  pull_request:" not in workflow
+    assert "environment: production" in workflow
+    assert "id-token: write" in workflow
+    assert "github.ref == 'refs/heads/master'" in workflow
+    assert "DEPLOY-COOKIDOO-WRITES-DISABLED" in workflow
+    assert "ENABLE-COOKIDOO-RECIPE-CREATION" in workflow
+    assert "DISABLE-COOKIDOO-RECIPE-CREATION" in workflow
+    assert "cookidoo-mcp-release" in workflow
+    assert "EnableFunctionUrl=true" in release
+    assert "EnableRecipeCreation=$enabled" in release
+    assert "CodeKey" in release
+    assert "code_key" in release
+    assert "deploy-disabled first" in release
+    assert "disable-writes" in release
+    assert "IfNoneMatch" not in release  # AWS CLI uses --if-none-match
+    assert "--if-none-match '*'" in release
+    assert "old_url" in release and "new_url" in release
+
+
+def test_release_workflow_cannot_deploy_writes_by_default():
+    release = load("scripts/release-recipe-tools.sh")
+    workflow = load(".github/workflows/release-recipe-tools.yml")
+    assert 'write_state=true' not in release
+    assert 'enabled=true' in release
+    assert 'enabled=false' in release
+    assert "if: inputs.operation == 'deploy-disabled'" in workflow
+    assert "RELEASE_ACTION:" in workflow

@@ -11,6 +11,7 @@ on:
       - .github/workflows/ci.yml
       - .github/workflows/deploy.yml
       - .github/workflows/activate-function-url.yml
+      - .github/workflows/release-recipe-tools.yml
       - .gitignore
       - README.md
   push:
@@ -55,7 +56,7 @@ jobs:
           /tmp/cookidoo-upstream/.venv/bin/python -m pytest -q tests
           /tmp/cookidoo-upstream/.venv/bin/python -m compileall -q src
       - name: Check deployment shell syntax
-        run: bash -n scripts/bootstrap-aws.sh scripts/deploy-aws.sh
+        run: bash -n scripts/bootstrap-aws.sh scripts/deploy-aws.sh scripts/release-recipe-tools.sh
       - name: CloudFormation lint
         run: |
           uvx --from cfn-lint==1.53.3 cfn-lint infrastructure/cookidoo.yaml infrastructure/bootstrap-github.yaml
