@@ -87,6 +87,8 @@ def test_lambda_json_mcp_tools_list_is_read_only(monkeypatch):
     assert "search_recipes" in names
     assert "get_recipe_details" in names
     assert "upload_custom_recipe" not in names
+    assert "preview_custom_recipe_image" in names
+    assert "set_custom_recipe_image" not in names
     assert "update_custom_recipe" not in names
 
 
@@ -167,7 +169,8 @@ def test_lambda_mcp_initialize_and_tool_discovery_with_writes_enabled(monkeypatc
     assert tools["statusCode"] == 200, tools
     payload = json.loads(tools["body"])
     names = {item["name"] for item in payload["result"]["tools"]}
-    assert len(names) == 7, names
+    assert len(names) == 9, names
+    assert "set_custom_recipe_image" in names
     assert "upload_custom_recipe" in names
     assert "preview_custom_recipe_upload" in names
     assert "update_custom_recipe" not in names
@@ -282,7 +285,7 @@ def test_modern_2026_mcp_discovery_and_tools_list_require_routing_headers(monkey
     names = {tool["name"] for tool in tools}
     assert "upload_custom_recipe" in names
     assert "preview_custom_recipe_upload" in names
-    assert len(names) == 7
+    assert len(names) == 9
 
     missing = runtime.handler(
         _event(

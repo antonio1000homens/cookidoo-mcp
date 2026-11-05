@@ -20,6 +20,7 @@ from schemas import Step
 from src.auth import AccessGate, AccessVerifier
 from src.config import ensure_credentials
 from src.recipe_creation import create, preview
+from src.recipe_images import preview as preview_image, upload as upload_image
 
 READ_ONLY = {"readOnlyHint": True, "openWorldHint": True}
 WRITE = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True}
@@ -124,6 +125,21 @@ def build_mcp() -> FastMCP:
         """
         return preview(recipe_json)
 
+    @mcp.tool(annotations=READ_ONLY)
+    async def preview_custom_recipe_image(recipe_id: str, image_url: str) -> str:
+        """Preview an image for one of your Cookidoo recipes. Does not change it.
+
+        Only public HTTPS JPEG/PNG images are supported. This checks recipe
+        ownership, decodes and sanitizes the image, then returns its exact
+        content confirmation including the recipe's existing image state.
+        Display the intended image to the user and obtain their explicit
+        approval before calling set_custom_recipe_image.
+        """
+        return await preview_image(
+            recipe_id, image_url,
+            ensure_credentials=ensure_credentials, get_service=upstream._get_service,
+        )
+
     # Never advertise a mutation tool until explicitly enabled by the server
     # operator in a separately reviewed production configuration change.
     if os.environ.get("COOKIDOO_RECIPE_CREATION_ENABLED") == "true":
@@ -141,6 +157,26 @@ def build_mcp() -> FastMCP:
                 recipe_json, confirmation,
                 ensure_credentials=ensure_credentials,
                 get_service=upstream._get_service,
+            )
+
+        @mcp.tool(annotations=WRITE)
+        async def set_custom_recipe_image(
+            recipe_id: str, image_url: str, confirmation: str,
+            replace_existing: bool = False,
+        ) -> str:
+            """Attach a reviewed JPEG/PNG photo to one of your custom recipes.
+
+            First call preview_custom_recipe_image using exactly the same
+            image_url and recipe_id. Show the photo and replacement status
+            to the user and obtain their explicit permission. The exact
+            confirmation binds the image bytes and prior recipe photo.
+            Set replace_existing=true only with explicit user approval.
+            No existing recipe text, ingredients, timing or steps change.
+            Never retry an ambiguous upload failure automatically.
+            """
+            return await upload_image(
+                recipe_id, image_url, confirmation, replace_existing,
+                ensure_credentials=ensure_credentials, get_service=upstream._get_service,
             )
 
     return mcp
