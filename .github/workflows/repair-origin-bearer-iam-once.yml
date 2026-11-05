@@ -1,0 +1,59 @@
+name: One-time repair Cookidoo origin-bearer IAM permission
+
+# The user authorized automatic repair of the broken connection. This
+# production update is triggered exactly once by the reviewed marker.
+on:
+  pull_request:
+    paths:
+      - infrastructure/cookidoo.yaml
+      - scripts/repair-origin-bearer-iam.sh
+      - .github/workflows/repair-origin-bearer-iam-once.yml
+      - tests/test_deployment.py
+      - tests/test_origin_bearer_permission.py
+  push:
+    branches: [master]
+    paths:
+      - .github/cookidoo-origin-iam-repair-approved-2026-11-05.txt
+
+permissions: {}
+
+concurrency:
+  group: cookidoo-mcp-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@v6
+      - name: Validate IAM repair script and CloudFormation
+        run: |
+          set -euo pipefail
+          bash -n scripts/repair-origin-bearer-iam.sh
+          uvx --from cfn-lint==1.53.3 cfn-lint infrastructure/cookidoo.yaml
+          python -m unittest discover -s tests -p test_origin_bearer_permission.py -v
+
+  repair:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-2' }}
+      CODE_BUCKET: ${{ vars.CODE_BUCKET }}
+      AWS_CLOUDFORMATION_ROLE_ARN: ${{ vars.AWS_CLOUDFORMATION_ROLE_ARN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7 # v6.0.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: cookidoo-origin-bearer-iam-repair
+      - name: Apply only the pre-reviewed Cookidoo IAM policy change
+        run: bash scripts/repair-origin-bearer-iam.sh

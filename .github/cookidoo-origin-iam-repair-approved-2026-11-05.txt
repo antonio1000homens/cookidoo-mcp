@@ -1,0 +1,5 @@
+One-time user-authorized Cookidoo IAM fix, 2026-11-05.
+Confirmed actual failure from Lambda logs: origin_bearer_unavailable.
+IAM simulation: ssm:GetParameter implicitDeny; ssm:GetParameters allowed.
+Change only Cookidoo Lambda execution-role permission to read its origin bearer.
+Do not change recipe tool enablement, deployed ZIP, Lambda URL or the secret.
