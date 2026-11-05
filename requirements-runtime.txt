@@ -2,3 +2,4 @@
 # Upstream already pins PyJWT and its cryptography transitive dependencies.
 boto3==1.40.0
 mangum==0.22.0
+pillow==13.0.0  # JPEG/PNG validation, orientation and EXIF/GPS removal

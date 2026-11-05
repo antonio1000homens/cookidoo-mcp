@@ -134,3 +134,33 @@ This workflow does not enable ChatGPT connectivity yet. The future Cloudflare Ac
 ### 3. Cost and release considerations
 
 IAM roles and CloudFormation stacks have no separate service fee, but the **£0/month objective is not a guarantee**. Your existing S3 bucket accumulates versioned ZIP objects (~35 MiB each), and Lambda invocation, CloudWatch Logs, network transfer and storage usage count against AWS account billing/free allowances. Periodically remove obsolete S3 keys after keeping an appropriate rollback version. No AWS resources are created by merely merging this pull request.
+
+## Custom recipe pictures (review-first)
+
+The MCP now supports `preview_custom_recipe_image(recipe_id, image_url)` and
+`set_custom_recipe_image(recipe_id, image_url, confirmation, replace_existing=false)`.
+It uses Cookidoo's **unofficial**, reverse-engineered signed Cloudinary upload
+flow (the original creator's Cookidoo account is required).
+
+- The preview is read-only: confirm the recipe is owned, download from a **public
+  HTTPS image URL**, validate JPEG/PNG and image dimensions (80–6000 px), and
+  strip embedded EXIF/GPS metadata. It returns an image SHA-256 and a
+  confirmation bound to the *current* existing recipe photo; image URLs are
+  never echoed into logs or preview results.
+- Upload requires the **same URL and exact confirmation**, plus explicit user
+  approval. If a picture already exists, `replace_existing=true` is required;
+  a changed photo or changed image bytes invalidates the confirmation.
+- The server signs the request with Cookidoo, uploads to Vorwerk's fixed
+  Cloudinary tenant, patches **only** the image field, and reads the recipe back.
+  A conditional S3 write-guard prevents silent retries on uncertain results.
+- The write tool is visible only when `COOKIDOO_RECIPE_CREATION_ENABLED=true`
+  (the existing recipe-writes operator gate). No image is automatically uploaded
+  as part of recipe creation. Other recipe edits/deletions remain unavailable.
+- A public HTTPS URL is required, not a local file path, data URI or private
+  signed-in web page. To avoid SSRF, private DNS/IPs and redirects are rejected,
+  the downloaded source is capped at 10 MB, and cookies/credentials never go
+  to the image host or Cloudinary. Only an image file is transmitted to Cloudinary.
+- **Image uploads are not yet kitchen- or live-API-tested**. Use a separate
+  temporary recipe for the first live acceptance test; don't overwrite manually
+  curated pictures without approval.
+
