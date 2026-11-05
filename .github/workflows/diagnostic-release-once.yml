@@ -6,6 +6,8 @@ on:
     paths:
       - src/auth.py
       - src/recipe_images.py
+      - src/recipe_image_copy.py
+      - tests/test_recipe_image_copy.py
       - requirements-runtime.txt
       - tests/test_recipe_images.py
       - tests/test_lambda_handler.py
@@ -16,6 +18,7 @@ on:
     paths:
       - .github/cookidoo-mcp-transport-diagnostics-approved-2026-11-05.txt
       - .github/cookidoo-image-upload-release-reviewed-2026-11-05.txt
+      - .github/cookidoo-photo-copy-release-reviewed-2026-11-05.txt
 
 permissions: {}
 
@@ -39,6 +42,7 @@ jobs:
           test -s dist/cookidoo-mcp.zip
           unzip -l dist/cookidoo-mcp.zip | grep -q 'src/auth.py'
           unzip -l dist/cookidoo-mcp.zip | grep -q 'src/recipe_images.py'
+          unzip -l dist/cookidoo-mcp.zip | grep -q 'src/recipe_image_copy.py'
           unzip -l dist/cookidoo-mcp.zip | grep -q 'PIL/Image.py'
       - name: Validate templates and security contract
         run: |

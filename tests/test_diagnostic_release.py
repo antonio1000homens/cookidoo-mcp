@@ -10,6 +10,8 @@ class DiagnosticReleaseContract(unittest.TestCase):
         push = workflow.split("  push:", 1)[1].split("permissions:", 1)[0]
         self.assertIn(marker, push)
         self.assertIn(".github/cookidoo-image-upload-release-reviewed-2026-11-05.txt", push)
+        self.assertIn(".github/cookidoo-photo-copy-release-reviewed-2026-11-05.txt", push)
+        self.assertNotIn("src/recipe_image_copy.py", push)
         self.assertNotIn("src/recipe_images.py", push)
         self.assertNotIn("src/auth.py", push)
         self.assertNotIn("workflow_dispatch:", workflow)

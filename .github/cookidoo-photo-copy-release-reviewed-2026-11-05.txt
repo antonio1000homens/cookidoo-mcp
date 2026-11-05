@@ -1,0 +1,5 @@
+One-time approved Cookidoo recipe-photo reuse feature release, 2026-11-05.
+User requested copying the image from their Chicken Madras TM7 to their separate
+Browning Edition. This release installs preview and approved copy tools only.
+Do not modify either custom recipe or its photo during deployment.
+Use protected production release and preserve existing write flag and Lambda URL.

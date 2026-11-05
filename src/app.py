@@ -21,6 +21,7 @@ from src.auth import AccessGate, AccessVerifier
 from src.config import ensure_credentials
 from src.recipe_creation import create, preview
 from src.recipe_images import preview as preview_image, upload as upload_image
+from src.recipe_image_copy import preview as preview_image_copy, copy as copy_image
 
 READ_ONLY = {"readOnlyHint": True, "openWorldHint": True}
 WRITE = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True}
@@ -140,6 +141,24 @@ def build_mcp() -> FastMCP:
             ensure_credentials=ensure_credentials, get_service=upstream._get_service,
         )
 
+    @mcp.tool(annotations=READ_ONLY)
+    async def preview_copy_custom_recipe_image(
+        source_recipe_id: str, destination_recipe_id: str,
+    ) -> str:
+        """Preview copying the existing picture from one owned recipe to another.
+
+        The source recipe and its photo remain untouched. Requires both
+        recipes to be owned by the signed-in Cookidoo user. The photo must
+        be available on a public HTTPS Cookidoo CDN URL. Read-only; returns
+        exact confirmation bound to source, destination, normalized picture
+        content, and destination's current picture, for explicit user review.
+        """
+        return await preview_image_copy(
+            source_recipe_id, destination_recipe_id,
+            ensure_credentials=ensure_credentials,
+            get_service=upstream._get_service,
+        )
+
     # Never advertise a mutation tool until explicitly enabled by the server
     # operator in a separately reviewed production configuration change.
     if os.environ.get("COOKIDOO_RECIPE_CREATION_ENABLED") == "true":
@@ -177,6 +196,27 @@ def build_mcp() -> FastMCP:
             return await upload_image(
                 recipe_id, image_url, confirmation, replace_existing,
                 ensure_credentials=ensure_credentials, get_service=upstream._get_service,
+            )
+
+        @mcp.tool(annotations=WRITE)
+        async def copy_custom_recipe_image(
+            source_recipe_id: str, destination_recipe_id: str,
+            confirmation: str, replace_existing: bool = False,
+        ) -> str:
+            """Copy an existing photo to a different one of your custom recipes.
+
+            First call preview_copy_custom_recipe_image, show the source photo,
+            source/destination names and whether the destination photo will be
+            replaced, then obtain explicit approval from the user. Confirm
+            exact preview contents and use replace_existing=true only if
+            replacement was explicitly approved. A fresh Cookidoo-signed
+            upload is made; the original photo and both recipes' ingredients,
+            steps, and guided-cooking settings remain unchanged.
+            """
+            return await copy_image(
+                source_recipe_id, destination_recipe_id, confirmation,
+                replace_existing, ensure_credentials=ensure_credentials,
+                get_service=upstream._get_service,
             )
 
     return mcp

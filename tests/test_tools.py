@@ -22,9 +22,11 @@ async def test_exposes_only_read_and_preview_tools(monkeypatch):
         "generate_recipe_structure",
         "preview_custom_recipe_upload",
         "preview_custom_recipe_image",
+        "preview_copy_custom_recipe_image",
     }
     assert "upload_custom_recipe" not in names
     assert "set_custom_recipe_image" not in names
+    assert "copy_custom_recipe_image" not in names
     assert "update_custom_recipe" not in names
     assert "connect_to_cookidoo" not in names
 

@@ -164,3 +164,21 @@ flow (the original creator's Cookidoo account is required).
   temporary recipe for the first live acceptance test; don't overwrite manually
   curated pictures without approval.
 
+
+### Reuse a photo from another of your own custom recipes
+
+Call `preview_copy_custom_recipe_image(source_recipe_id, destination_recipe_id)`.
+After displaying the source/destination names, image SHA-256 and replacement
+warning, obtain explicit user approval and call
+`copy_custom_recipe_image(source_recipe_id, destination_recipe_id, confirmation,
+replace_existing=false)`. The source recipe picture must be a publicly
+fetchable HTTPS Cookidoo CDN URL. The image is re-downloaded, validated,
+metadata-stripped and re-uploaded as a **new** signed Cloudinary asset for
+the destination, rather than reusing a picture asset ID (which Cookidoo
+may reject). No recipe ingredients, titles or cooking settings are changed.
+
+The source picture remains untouched. Copying is never automatic, and an
+already existing picture on the destination requires explicit replacement
+approval. The existing write-guard prevents automatic retries on uncertain
+results. If the source image is not available as a HTTPS URL, ask for a new
+photo URL instead; never attempt to read a private or internal source.
