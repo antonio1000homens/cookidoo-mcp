@@ -8,6 +8,7 @@ on:
         required: true
         type: choice
         options: [deploy-disabled, enable-writes, disable-writes]
+        default: deploy-disabled
       confirmation:
         description: 'Type DEPLOY-COOKIDOO-WRITES-DISABLED, ENABLE-COOKIDOO-RECIPE-CREATION, or DISABLE-COOKIDOO-RECIPE-CREATION'
         required: true
@@ -21,16 +22,17 @@ concurrency:
 
 jobs:
   validate:
-    if: >-
-      github.ref == 'refs/heads/master' &&
-      ((inputs.operation == 'deploy-disabled' && inputs.confirmation == 'DEPLOY-COOKIDOO-WRITES-DISABLED') ||
-       (inputs.operation == 'enable-writes' && inputs.confirmation == 'ENABLE-COOKIDOO-RECIPE-CREATION') ||
-       (inputs.operation == 'disable-writes' && inputs.confirmation == 'DISABLE-COOKIDOO-RECIPE-CREATION'))
+    # Always start and fail visibly on a wrong confirmation or branch.
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Validate master branch, operation and confirmation
+        env:
+          RELEASE_ACTION: ${{ inputs.operation }}
+          RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
+        run: bash scripts/validate-recipe-release-request.sh
       - uses: astral-sh/setup-uv@v6
       - name: Verify shell script and CloudFormation templates
         run: |
@@ -63,6 +65,7 @@ jobs:
 
   release:
     needs: validate
+    if: github.ref == 'refs/heads/master' && needs.validate.result == 'success'
     runs-on: ubuntu-latest
     environment: production
     permissions:
@@ -74,6 +77,7 @@ jobs:
       CODE_BUCKET: ${{ vars.CODE_BUCKET }}
       AWS_CLOUDFORMATION_ROLE_ARN: ${{ vars.AWS_CLOUDFORMATION_ROLE_ARN }}
       RELEASE_ACTION: ${{ inputs.operation }}
+      RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Fetch validated ZIP (only for disabled code release)

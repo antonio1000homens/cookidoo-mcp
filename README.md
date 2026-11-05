@@ -43,6 +43,8 @@ environment, short-lived AWS OIDC credentials, existing S3 ZIP release bucket
 and CloudFormation stack. It preserves the currently configured Lambda
 Function URL on every run and verifies the unchanged endpoint afterwards.
 
+If an operation's confirmation is blank or mistyped, the validation job fails with an explicit `::error::` message showing the required string. This is intentional: a bad confirmation must never produce a misleading all-skipped run.
+
 1. **Deploy reviewed code without enabling recipe creation.** Select
    `deploy-disabled` and enter `DEPLOY-COOKIDOO-WRITES-DISABLED`.
    This runs all offline tests and the ZIP build, then updates Lambda with
