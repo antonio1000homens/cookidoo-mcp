@@ -133,7 +133,7 @@ def test_origin_bearer_iam_grants_singular_getparameter_on_only_origin_secret():
     origin_stmt = template.split("PolicyName: ReadOriginBearerSingleParameter", 1)[1].split(
         "PolicyName: ReserveOwnCustomRecipeTitles", 1
     )[0]
-    assert "Action: ssm:GetParameter\\n" in origin_stmt
+    assert "Action: ssm:GetParameter" in [line.strip() for line in origin_stmt.splitlines()]
     assert "parameter${OriginBearerParameterName}" in origin_stmt
     assert "EmailParameterName" not in origin_stmt
     assert "PasswordParameterName" not in origin_stmt
@@ -143,4 +143,4 @@ def test_origin_bearer_iam_grants_singular_getparameter_on_only_origin_secret():
         "PolicyName: ReadOriginBearerSingleParameter", 1
     )[0]
     assert "Action: ssm:GetParameters" in batch_stmt
-    assert "Action: ssm:GetParameter\\n" not in batch_stmt
+    assert "Action: ssm:GetParameter" not in [line.strip() for line in batch_stmt.splitlines()]
