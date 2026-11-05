@@ -1,4 +1,4 @@
-"""Allowlist contract: mutation tools must not be advertised or callable."""
+"""Tool allowlist contract: custom recipe creation is disabled by default."""
 from unittest.mock import AsyncMock
 
 import pytest
@@ -9,7 +9,8 @@ from src import app
 
 
 @pytest.mark.asyncio
-async def test_exposes_only_read_only_tools():
+async def test_exposes_only_read_and_preview_tools(monkeypatch):
+    monkeypatch.delenv("COOKIDOO_RECIPE_CREATION_ENABLED", raising=False)
     mcp = app.build_mcp()
     async with Client(mcp) as client:
         names = {item.name for item in await client.list_tools()}
@@ -19,6 +20,7 @@ async def test_exposes_only_read_only_tools():
         "list_custom_recipes",
         "get_custom_recipe",
         "generate_recipe_structure",
+        "preview_custom_recipe_upload",
     }
     assert "upload_custom_recipe" not in names
     assert "update_custom_recipe" not in names
