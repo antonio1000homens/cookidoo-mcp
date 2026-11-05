@@ -330,7 +330,15 @@ async def upload(recipe_id: str, image_url: str, confirmation: str,
         )
     bucket = os.environ.get("COOKIDOO_WRITE_GUARD_BUCKET", "")
     await asyncio.to_thread(_reserve_image, bucket, recipe_id, image)
-    image_ref = await update_image(service, recipe_id, image)
+    try:
+        image_ref = await update_image(service, recipe_id, image)
+    except ToolError:
+        raise
+    except Exception:
+        raise ToolError(
+            "Cookidoo image operation has an uncertain outcome. "
+            "Inspect the recipe and write-guard before any retry."
+        ) from None
     try:
         details, _ = await service.get_custom_recipe(recipe_id)
         persisted = str(getattr(details, "image", None) or "")

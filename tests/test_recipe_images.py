@@ -229,7 +229,7 @@ async def test_image_upload_failure_is_not_retried(monkeypatch):
     markers = []
     monkeypatch.setattr(images, "_reserve_image", lambda *args: markers.append(args))
     call = AsyncMock(side_effect=TimeoutError("private upstream response"))
-    with pytest.raises(TimeoutError):
+    with pytest.raises(ToolError, match="uncertain outcome"):
         await images.upload(state.id, "https://cdn.example.com/photo.png",
                             images._confirmation(state.id, photo, ""),
                             ensure_credentials=lambda: None, get_service=lambda: service,
