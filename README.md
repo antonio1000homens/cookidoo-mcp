@@ -43,20 +43,17 @@ environment, short-lived AWS OIDC credentials, existing S3 ZIP release bucket
 and CloudFormation stack. It preserves the currently configured Lambda
 Function URL on every run and verifies the unchanged endpoint afterwards.
 
-If an operation's confirmation is blank or mistyped, the validation job fails with an explicit `::error::` message showing the required string. This is intentional: a bad confirmation must never produce a misleading all-skipped run.
+The workflow has **one text input only**: `confirmation`. There is no operation dropdown. The chosen action is derived from the exact confirmation string, so mismatched fields are impossible. Invalid input (including a trailing comma) fails validation before AWS credentials are requested.
 
-1. **Deploy reviewed code without enabling recipe creation.** Select
-   `deploy-disabled` and enter `DEPLOY-COOKIDOO-WRITES-DISABLED`.
+1. **Deploy reviewed code without enabling recipe creation.** Enter `DEPLOY-COOKIDOO-WRITES-DISABLED` in the single confirmation field.
    This runs all offline tests and the ZIP build, then updates Lambda with
    `EnableRecipeCreation=false`. The preview tool becomes available but
    `upload_custom_recipe` remains absent.
 2. **Separate approval to allow actual uploads.** After a live read-only
-   smoke test and review of one disposable custom recipe, select
-   `enable-writes` and enter `ENABLE-COOKIDOO-RECIPE-CREATION`.
+   smoke test and review of one disposable custom recipe, enter `ENABLE-COOKIDOO-RECIPE-CREATION` in that field.
    The action only succeeds when the deployed ZIP matches the exact
    reviewed `master` SHA, and it never uploads a recipe itself.
-3. **Emergency disable.** Select `disable-writes` and enter
-   `DISABLE-COOKIDOO-RECIPE-CREATION` to remove the tool again
+3. **Emergency disable.** Enter `DISABLE-COOKIDOO-RECIPE-CREATION` to remove the tool again
    without changing the code or Function URL.
 
 The exact-content SHA-256 confirmation produced by

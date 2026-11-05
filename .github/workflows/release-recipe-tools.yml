@@ -3,14 +3,8 @@ name: Cookidoo recipe tools - manual controlled release
 on:
   workflow_dispatch:
     inputs:
-      operation:
-        description: 'Install reviewed code with writes disabled, enable recipe creation, or disable it'
-        required: true
-        type: choice
-        options: [deploy-disabled, enable-writes, disable-writes]
-        default: deploy-disabled
       confirmation:
-        description: 'Type DEPLOY-COOKIDOO-WRITES-DISABLED, ENABLE-COOKIDOO-RECIPE-CREATION, or DISABLE-COOKIDOO-RECIPE-CREATION'
+        description: 'Type ONE exact action code: DEPLOY-COOKIDOO-WRITES-DISABLED, ENABLE-COOKIDOO-RECIPE-CREATION or DISABLE-COOKIDOO-RECIPE-CREATION (no comma)'
         required: true
         type: string
 
@@ -22,24 +16,26 @@ concurrency:
 
 jobs:
   validate:
-    # Always start and fail visibly on a wrong confirmation or branch.
+    # Derive the operation from ONE exact confirmation; no mismatched dropdown.
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      action: ${{ steps.confirm.outputs.action }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Validate master branch, operation and confirmation
+      - name: Validate master branch and derive action from confirmation
+        id: confirm
         env:
-          RELEASE_ACTION: ${{ inputs.operation }}
           RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
-        run: bash scripts/validate-recipe-release-request.sh
+        run: bash scripts/validate-recipe-release-request.sh >> "$GITHUB_OUTPUT"
       - uses: astral-sh/setup-uv@v6
       - name: Verify shell script and CloudFormation templates
         run: |
           bash -n scripts/release-recipe-tools.sh
           uvx --from cfn-lint==1.53.3 cfn-lint infrastructure/cookidoo.yaml infrastructure/bootstrap-github.yaml
       - name: Fetch pinned upstream, install and run offline tests
-        if: inputs.operation != 'disable-writes'
+        if: steps.confirm.outputs.action != 'disable-writes'
         run: |
           set -euo pipefail
           git clone --quiet https://github.com/alexandrepa/mcp-cookidoo.git /tmp/cookidoo-upstream
@@ -52,10 +48,10 @@ jobs:
           )
           PYTHONPATH="$GITHUB_WORKSPACE:/tmp/cookidoo-upstream" /tmp/cookidoo-upstream/.venv/bin/python -m pytest -q tests
       - name: Build immutable Lambda ZIP (writes remain disabled)
-        if: inputs.operation == 'deploy-disabled'
+        if: steps.confirm.outputs.action == 'deploy-disabled'
         run: bash scripts/build-zip.sh
       - name: Preserve exact validated ZIP for deploy job
-        if: inputs.operation == 'deploy-disabled'
+        if: steps.confirm.outputs.action == 'deploy-disabled'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: cookidoo-recipe-tools-zip
@@ -76,12 +72,12 @@ jobs:
       AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-2' }}
       CODE_BUCKET: ${{ vars.CODE_BUCKET }}
       AWS_CLOUDFORMATION_ROLE_ARN: ${{ vars.AWS_CLOUDFORMATION_ROLE_ARN }}
-      RELEASE_ACTION: ${{ inputs.operation }}
+      RELEASE_ACTION: ${{ needs.validate.outputs.action }}
       RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Fetch validated ZIP (only for disabled code release)
-        if: inputs.operation == 'deploy-disabled'
+        if: needs.validate.outputs.action == 'deploy-disabled'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: cookidoo-recipe-tools-zip
