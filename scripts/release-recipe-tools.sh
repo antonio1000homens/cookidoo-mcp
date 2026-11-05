@@ -2,6 +2,9 @@
 # Manual production release: preserves the already active Lambda URL.
 set -euo pipefail
 
+# Repeat exact confirmation validation in the privileged deployment job.
+bash scripts/validate-recipe-release-request.sh
+
 [[ "$GITHUB_ACTIONS" == "true" && "$GITHUB_REF" == "refs/heads/master" ]] || exit 1
 [[ "$AWS_REGION" == "eu-west-2" && "$CODE_BUCKET" == "aws2022-lambda-code" ]] || exit 1
 [[ "$RELEASE_ACTION" =~ ^(deploy-disabled|enable-writes|disable-writes)$ ]] || exit 1
