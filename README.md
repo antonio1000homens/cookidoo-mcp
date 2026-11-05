@@ -21,9 +21,13 @@ There are **no containers**, ECR, Docker builds, running VMs, SQS polling, Dynam
 
 The Lambda checks the Worker bearer against AWS SSM Standard SecureString using a constant-time comparison, then independently validates the Access JWT. Missing/unavailable secrets, missing bearer, and invalid JWT all fail closed. The secret is cached per warm Lambda environment; rotate it by provisioning the new value and deploying/recycling the Lambda before updating the Worker secret. The Worker secret and SSM value must be identical and must never be placed in tracked configuration. The native handler uses Mangum and FastMCP's `stateless_http=True, json_response=True`.
 
-### Read-only first
+### Guarded recipe creation (disabled until separately approved)
 
-Only `search_recipes`, `get_recipe_details`, `list_custom_recipes`, `get_custom_recipe` and `generate_recipe_structure` are registered. There is **no** `connect_to_cookidoo` (which exposes account email), `upload_custom_recipe`, or `update_custom_recipe` tool. Custom recipe writes require additional explicit, server-enforced safeguards and approval in a later PR.
+The default remote tool catalog includes the five original read/validation tools plus \`preview_custom_recipe_upload\`. This preview validates upstream \`CustomRecipe\` data (including TM7 settings, reverse speeds and ingredient links), applies strict payload limits, and returns a JSON preview plus a SHA-256 confirmation string. It does not write anything.
+
+\`upload_custom_recipe\` is registered **only if** the separate CloudFormation parameter \`EnableRecipeCreation=true\` is explicitly set. It requires the exact previewed recipe JSON and matching \`CREATE-COOKIDOO-SHA256:<digest>\` confirmation **after a user approves that exact preview**. This is a data-integrity gate, not proof of user consent; clients must obtain explicit user approval before invoking the write tool. Existing-recipe names are checked before submission. A create-only S3 marker in the pre-existing code bucket under \`cookidoo-mcp/write-guards/\` prevents multiple writes using the same normalized title across concurrent or repeated invocations. A timeout or ambiguous remote failure retains its marker to prevent unsafe automatic retries. Inspect the account and marker manually before clearing and retrying. Store no recipe text or credentials in this marker; only SHA-256 hashes.
+
+The existing \`update_custom_recipe\`, deletion and \`connect_to_cookidoo\` remain unavailable. Normal deployment remains private/read-only: no new AWS service, public URL or write activation is performed by merging this change. **Do not switch on writes until a disposable recipe test, account-scoped access and an explicit production approval have been reviewed.**
 
 Defaults are `COOKIDOO_COUNTRY=gb`, `COOKIDOO_LANGUAGE=en-GB` and `COOKIDOO_DEVICE=TM7`.
 
@@ -59,7 +63,7 @@ Lambda: Python 3.12, 512 MB, 30-second timeout, reserved concurrency 2, seven-da
 6. After auth tests pass, separately activate the AWS Function URL. Verify requests without credentials and with either credential alone return 403 while Worker forwarding stays disabled.
 7. Separately activate Worker forwarding after direct-origin checks and real ChatGPT OAuth/MCP tests are reviewed.
 8. Profile free-tier consumption/shared budgets to avoid unexpected AWS charges.
-9. Later explicit write-approval controls and disposable test custom recipe.
+9. Run offline recipe-preview/idempotency tests; separately approve and enable guarded creation only after a disposable test recipe has been reviewed.
 
 Full plan: [issue #1](https://github.com/antonio1000homens/cookidoo-mcp/issues/1).
 

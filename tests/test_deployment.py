@@ -79,3 +79,15 @@ def test_action_commit_pins_use_full_40_character_sha():
         for action, ref in re.findall(r"^\\s*(?:-\\s*)?uses:\\s+([^@\\s]+)@([^\\s#]+)", workflow, re.MULTILINE):
             if re.fullmatch(r"[0-9a-f]+", ref):
                 assert len(ref) == 40, f"{workflow_path}: {action}@{ref} is not a full SHA"
+
+
+def test_creation_is_disabled_by_default_and_s3_scope_is_explicit():
+    template = load("infrastructure/cookidoo.yaml")
+    assert "EnableRecipeCreation:" in template
+    assert "Default: 'false'" in template
+    assert "COOKIDOO_RECIPE_CREATION_ENABLED: !Ref EnableRecipeCreation" in template
+    assert "/cookidoo-mcp/write-guards/*" in template
+    assert "s3:PutObject" in template
+    deploy = load("scripts/deploy-aws.sh")
+    # Normal private deploy must never enable recipe writes unexpectedly.
+    assert "EnableRecipeCreation=true" not in deploy
