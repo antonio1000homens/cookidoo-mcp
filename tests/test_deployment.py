@@ -52,7 +52,7 @@ def test_deployment_is_manual_and_reuses_tested_build():
     assert "workflow_dispatch:" in workflow
     assert "\n  push:" not in workflow
     assert "\n  pull_request:" not in workflow
-    assert "github.ref == 'refs/heads/master'" in workflow
+    assert "GITHUB_REF" in load("scripts/validate-recipe-release-request.sh")
     assert "environment: production" in workflow
     assert "id-token: write" in workflow
     assert "actions/upload-artifact@" in workflow
@@ -123,5 +123,5 @@ def test_release_workflow_cannot_deploy_writes_by_default():
     assert 'write_state=true' not in release
     assert 'enabled=true' in release
     assert 'enabled=false' in release
-    assert "if: inputs.operation == 'deploy-disabled'" in workflow
-    assert "RELEASE_ACTION:" in workflow
+    assert "steps.confirm.outputs.action == 'deploy-disabled'" in workflow
+    assert "RELEASE_ACTION: ${{ needs.validate.outputs.action }}" in workflow

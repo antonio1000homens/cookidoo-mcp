@@ -1,21 +1,24 @@
 #!/usr/bin/env bash
-# Invalid manual release input must fail visibly, not skip all jobs.
+# One typed confirmation is the only user-supplied operation selector.
+# Its exact value is validated before AWS credentials are available.
 set -euo pipefail
 if [[ "${GITHUB_REF:-}" != "refs/heads/master" ]]; then
   echo "::error::Recipe release must run from master (got ${GITHUB_REF:-unset})." >&2
   exit 1
 fi
-case "${RELEASE_ACTION:-}" in
-  deploy-disabled) expected='DEPLOY-COOKIDOO-WRITES-DISABLED' ;;
-  enable-writes) expected='ENABLE-COOKIDOO-RECIPE-CREATION' ;;
-  disable-writes) expected='DISABLE-COOKIDOO-RECIPE-CREATION' ;;
+case "${RELEASE_CONFIRMATION:-}" in
+  DEPLOY-COOKIDOO-WRITES-DISABLED) action=deploy-disabled ;;
+  ENABLE-COOKIDOO-RECIPE-CREATION) action=enable-writes ;;
+  DISABLE-COOKIDOO-RECIPE-CREATION) action=disable-writes ;;
   *)
-    echo "::error::Invalid operation. Choose deploy-disabled, enable-writes or disable-writes." >&2
+    echo "::error::Invalid confirmation. Enter exactly one of the three action codes shown in the workflow form, with no trailing punctuation or comma." >&2
     exit 1
     ;;
 esac
-if [[ "${RELEASE_CONFIRMATION:-}" != "$expected" ]]; then
-  echo "::error::Incorrect confirmation for '${RELEASE_ACTION}'. Enter exactly: $expected" >&2
+# Defence in depth: the privileged release job receives the validated output
+# and the original confirmation. Reject any disagreement.
+if [[ -n "${RELEASE_ACTION:-}" && "$RELEASE_ACTION" != "$action" ]]; then
+  echo "::error::Validated action does not match the deployment action." >&2
   exit 1
 fi
-echo "Manual release request verified: ${RELEASE_ACTION} on master."
+printf 'action=%s\n' "$action"

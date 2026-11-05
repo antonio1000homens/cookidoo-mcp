@@ -1,10 +1,9 @@
-"""Guard regression: invalid workflow_dispatch inputs must FAIL, not skip."""
+"""The manual release has one exact confirmation input, never two mismatched fields."""
 from __future__ import annotations
 
 import os
 import subprocess
 from pathlib import Path
-
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,61 +11,67 @@ SCRIPT = ROOT / "scripts/validate-recipe-release-request.sh"
 WORKFLOW = ROOT / ".github/workflows/release-recipe-tools.yml"
 
 
-def invoke(operation, confirmation, branch="refs/heads/master"):
-    return subprocess.run(
-        ["bash", str(SCRIPT)],
-        cwd=ROOT,
-        env={
-            **os.environ,
-            "RELEASE_ACTION": operation,
-            "RELEASE_CONFIRMATION": confirmation,
-            "GITHUB_REF": branch,
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+def invoke(confirmation, action=None, branch="refs/heads/master"):
+    env = {**os.environ, "GITHUB_REF": branch, "RELEASE_CONFIRMATION": confirmation}
+    env.pop("RELEASE_ACTION", None)
+    if action is not None:
+        env["RELEASE_ACTION"] = action
+    return subprocess.run(["bash", str(SCRIPT)], cwd=ROOT, env=env,
+                          capture_output=True, text=True, check=False)
 
 
-@pytest.mark.parametrize(("operation", "confirmation"), [
-    ("deploy-disabled", "DEPLOY-COOKIDOO-WRITES-DISABLED"),
-    ("enable-writes", "ENABLE-COOKIDOO-RECIPE-CREATION"),
-    ("disable-writes", "DISABLE-COOKIDOO-RECIPE-CREATION"),
+@pytest.mark.parametrize(("confirmation", "operation"), [
+    ("DEPLOY-COOKIDOO-WRITES-DISABLED", "deploy-disabled"),
+    ("ENABLE-COOKIDOO-RECIPE-CREATION", "enable-writes"),
+    ("DISABLE-COOKIDOO-RECIPE-CREATION", "disable-writes"),
 ])
-def test_matching_confirmation_accepted(operation, confirmation):
-    result = invoke(operation, confirmation)
+def test_confirmation_determines_action(confirmation, operation):
+    result = invoke(confirmation)
     assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f"action={operation}"
+    assert invoke(confirmation, operation).returncode == 0
 
 
-@pytest.mark.parametrize(("operation", "confirmation"), [
-    ("deploy-disabled", ""),
-    ("deploy-disabled", "DEPLOY-COOKIDOO-WRITES-DISABLE"),
-    ("enable-writes", "DEPLOY-COOKIDOO-WRITES-DISABLED"),
-    ("disable-writes", "ENABLE-COOKIDOO-RECIPE-CREATION"),
-    ("unknown-operation", "DEPLOY-COOKIDOO-WRITES-DISABLED"),
-    ("", ""),
+@pytest.mark.parametrize("confirmation", [
+    "", "DEPLOY-COOKIDOO-WRITES-DISABLED,",
+    "DEPLOY-COOKIDOO-WRITES-DISABLE",
+    "ENABLE-COOKIDOO-RECIPE-CREATION ",
+    "enable-writes",
+    "disable-writes",
 ])
-def test_invalid_confirmation_fails_with_actionable_error(operation, confirmation):
-    result = invoke(operation, confirmation)
+def test_invalid_confirmation_fails_visibly(confirmation):
+    result = invoke(confirmation)
     assert result.returncode != 0
     assert "::error::" in result.stderr
-    assert "skipped" not in result.stderr.lower()
 
 
-def test_non_master_branch_fails_with_clear_message():
-    result = invoke("deploy-disabled", "DEPLOY-COOKIDOO-WRITES-DISABLED", "refs/heads/test")
+def test_mismatched_privileged_action_fails():
+    result = invoke("DEPLOY-COOKIDOO-WRITES-DISABLED", "enable-writes")
     assert result.returncode != 0
     assert "::error::" in result.stderr
+
+
+def test_non_master_branch_fails_visibly():
+    result = invoke("DEPLOY-COOKIDOO-WRITES-DISABLED", branch="refs/heads/feature")
+    assert result.returncode != 0
     assert "master" in result.stderr
+    assert "::error::" in result.stderr
 
 
-def test_job_does_not_skip_on_missing_confirmation():
+def test_workflow_uses_only_confirmation_and_defers_write_approval():
     workflow = WORKFLOW.read_text(encoding="utf-8")
     validate_job = workflow.split("  validate:", 1)[1].split("  release:", 1)[0]
-    assert "\n    if:" not in validate_job
-    assert "Validate master branch, operation and confirmation" in validate_job
-    assert "RELEASE_CONFIRMATION: ${{ inputs.confirmation }}" in workflow
-    assert "run: bash scripts/validate-recipe-release-request.sh" in validate_job
-    assert "needs.validate.result == 'success'" in workflow
+    form = workflow.split("    inputs:", 1)[1].split("permissions:", 1)[0]
+    assert "      operation:" not in form
+    assert form.count("      confirmation:") == 1
+    assert "type: string" in form
+    assert "type: choice" not in form
+    assert "inputs.operation" not in workflow
+    assert "\\n    if:" not in validate_job
+    assert "id: confirm" in validate_job
+    assert "bash scripts/validate-recipe-release-request.sh" in validate_job
+    assert 'action: ${{ steps.confirm.outputs.action }}' in validate_job
+    assert "needs.validate.outputs.action" in workflow
+    assert "environment: production" in workflow
     script = (ROOT / "scripts/release-recipe-tools.sh").read_text(encoding="utf-8")
     assert "bash scripts/validate-recipe-release-request.sh" in script
