@@ -1,10 +1,13 @@
-name: One-time Cookidoo MCP transport diagnostics release
+name: Controlled Cookidoo MCP Lambda release (approved marker)
 
-# User requested active diagnosis. Unique marker makes this a one-time event.
+# A reviewed unique marker triggers a one-time protected production release.
 on:
   pull_request:
     paths:
       - src/auth.py
+      - src/recipe_images.py
+      - requirements-runtime.txt
+      - tests/test_recipe_images.py
       - tests/test_lambda_handler.py
       - .github/workflows/diagnostic-release-once.yml
       - tests/test_diagnostic_release.py
@@ -12,6 +15,7 @@ on:
     branches: [master]
     paths:
       - .github/cookidoo-mcp-transport-diagnostics-approved-2026-11-05.txt
+      - .github/cookidoo-image-upload-release-reviewed-2026-11-05.txt
 
 permissions: {}
 
@@ -27,13 +31,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: astral-sh/setup-uv@v6
-      - name: Build Lambda diagnostic ZIP without publishing
+      - name: Build reviewed Lambda ZIP without publishing
         run: |
           set -euo pipefail
           bash -n scripts/release-recipe-tools.sh scripts/validate-recipe-release-request.sh
           bash scripts/build-zip.sh
           test -s dist/cookidoo-mcp.zip
           unzip -l dist/cookidoo-mcp.zip | grep -q 'src/auth.py'
+          unzip -l dist/cookidoo-mcp.zip | grep -q 'src/recipe_images.py'
+          unzip -l dist/cookidoo-mcp.zip | grep -q 'PIL/Image.py'
       - name: Validate templates and security contract
         run: |
           set -euo pipefail
@@ -108,7 +114,8 @@ jobs:
           enabled="$(jq -er '.[] | select(.ParameterKey == "EnableRecipeCreation") | .ParameterValue' <<<"$params")"
           [[ "$key" == "cookidoo-mcp/$GITHUB_SHA/cookidoo-mcp.zip" ]]
           [[ "$enabled" == "true" ]]
-          echo '### Cookidoo transport diagnostics released' >> "$GITHUB_STEP_SUMMARY"
+          echo '### Cookidoo reviewed image support released' >> "$GITHUB_STEP_SUMMARY"
           echo '- Existing Function URL preserved by each release phase' >> "$GITHUB_STEP_SUMMARY"
           echo '- Recipe writes restored to previous enabled state after verified code update' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Next authenticated request will log safe HTTP status and MIME' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Image preview and approved upload tools are now present' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Existing recipe pictures were NOT changed' >> "$GITHUB_STEP_SUMMARY"

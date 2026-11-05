@@ -1,0 +1,6 @@
+One-time automatic release, 2026-11-05.
+The user authorized adding custom recipe image-upload support.
+Only deploy the reviewed source, keep the existing Lambda Function URL,
+disable writes during deployment, and restore the pre-existing write flag.
+This release must not upload or change any recipe photo automatically;
+in particular preserve the user's manually edited Chicken Madras TM7.
