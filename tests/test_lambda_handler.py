@@ -216,3 +216,84 @@ def test_authorized_transport_diagnostics_do_not_log_credentials(monkeypatch, ca
     assert "synthetic-access-token-never-log" not in caplog.text
     assert "synthetic-origin-secret-never-log" not in caplog.text
     assert "tools/list" not in caplog.text
+
+
+
+def test_modern_2026_mcp_discovery_and_tools_list_require_routing_headers(monkeypatch):
+    """Exercise real pinned FastMCP 4 / MCP SDK 2 modern HTTP wire format."""
+    class StubVerifier:
+        def verify(self, token):
+            if token != "synthetic-valid-access":
+                raise ValueError("Invalid")
+
+    monkeypatch.setenv("COOKIDOO_RECIPE_CREATION_ENABLED", "true")
+    monkeypatch.setattr(
+        auth.AccessVerifier, "from_environment",
+        classmethod(lambda cls: StubVerifier()),
+    )
+    monkeypatch.setattr(
+        auth.AccessGate, "_expected_origin_token",
+        lambda self: "synthetic-valid-origin",
+    )
+    import src.lambda_handler as runtime
+    importlib.reload(runtime)
+
+    headers = {
+        "cf-access-jwt-assertion": "synthetic-valid-access",
+        "authorization": "Bearer synthetic-valid-origin",
+        "accept": "application/json, text/event-stream",
+        "mcp-protocol-version": "2026-07-28",
+    }
+    meta = {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {},
+        "io.modelcontextprotocol/clientInfo": {
+            "name": "lambda-modern-protocol-test", "version": "1.0.0"
+        },
+    }
+
+    discover = runtime.handler(
+        _event(
+            headers={**headers, "mcp-method": "server/discover"},
+            body={
+                "jsonrpc": "2.0", "id": 11, "method": "server/discover",
+                "params": {"_meta": meta},
+            },
+        ),
+        {},
+    )
+    assert discover["statusCode"] == 200, discover
+    data = json.loads(discover["body"])
+    assert data["id"] == 11
+    assert "result" in data, discover
+
+    listing = runtime.handler(
+        _event(
+            headers={**headers, "mcp-method": "tools/list"},
+            body={
+                "jsonrpc": "2.0", "id": 12, "method": "tools/list",
+                "params": {"_meta": meta},
+            },
+        ),
+        {},
+    )
+    assert listing["statusCode"] == 200, listing
+    tools = json.loads(listing["body"])["result"]["tools"]
+    names = {tool["name"] for tool in tools}
+    assert "upload_custom_recipe" in names
+    assert "preview_custom_recipe_upload" in names
+    assert len(names) == 7
+
+    missing = runtime.handler(
+        _event(
+            headers=headers,
+            body={
+                "jsonrpc": "2.0", "id": 13, "method": "server/discover",
+                "params": {"_meta": meta},
+            },
+        ),
+        {},
+    )
+    assert missing["statusCode"] == 400, missing
+    error = json.loads(missing["body"])
+    assert error.get("error", {}).get("code") == -32020, missing
