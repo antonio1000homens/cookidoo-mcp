@@ -285,7 +285,7 @@ def test_modern_2026_mcp_discovery_and_tools_list_require_routing_headers(monkey
     names = {tool["name"] for tool in tools}
     assert "upload_custom_recipe" in names
     assert "preview_custom_recipe_upload" in names
-    assert len(names) == 7
+    assert len(names) == 9
 
     missing = runtime.handler(
         _event(

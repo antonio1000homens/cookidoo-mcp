@@ -315,7 +315,7 @@ async def test_mcp_image_tools_visibility_and_approval_contract(monkeypatch):
     async with Client(app.build_mcp()) as client:
         tools = {x.name: x for x in await client.list_tools()}
     assert "set_custom_recipe_image" in tools
-    schema = tools["set_custom_recipe_image"].inputSchema
+    schema = tools["set_custom_recipe_image"].input_schema
     assert "confirmation" in schema["required"]
     assert "image_url" in schema["required"]
     assert "recipe_id" in schema["required"]
