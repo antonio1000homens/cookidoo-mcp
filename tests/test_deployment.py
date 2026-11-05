@@ -125,3 +125,22 @@ def test_release_workflow_cannot_deploy_writes_by_default():
     assert 'enabled=false' in release
     assert "steps.confirm.outputs.action == 'deploy-disabled'" in workflow
     assert "RELEASE_ACTION: ${{ needs.validate.outputs.action }}" in workflow
+
+
+def test_origin_bearer_iam_grants_singular_getparameter_on_only_origin_secret():
+    """AccessGate calls ssm.get_parameter, not ssm.get_parameters."""
+    template = load("infrastructure/cookidoo.yaml")
+    origin_stmt = template.split("PolicyName: ReadOriginBearerSingleParameter", 1)[1].split(
+        "PolicyName: ReserveOwnCustomRecipeTitles", 1
+    )[0]
+    assert "Action: ssm:GetParameter" in [line.strip() for line in origin_stmt.splitlines()]
+    assert "parameter${OriginBearerParameterName}" in origin_stmt
+    assert "EmailParameterName" not in origin_stmt
+    assert "PasswordParameterName" not in origin_stmt
+    assert "Resource: '*'" not in origin_stmt
+    # Preserve existing batch-only access for account credentials.
+    batch_stmt = template.split("PolicyName: ReadOnlyCookidooParameters", 1)[1].split(
+        "PolicyName: ReadOriginBearerSingleParameter", 1
+    )[0]
+    assert "Action: ssm:GetParameters" in batch_stmt
+    assert "Action: ssm:GetParameter" not in [line.strip() for line in batch_stmt.splitlines()]
