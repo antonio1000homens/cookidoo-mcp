@@ -34,6 +34,11 @@ Parameters:
     Type: String
     Description: Application AUD tag from Cloudflare Access (not a secret).
     MinLength: 1
+  EnableRecipeCreation:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+    Description: Explicitly enable reviewed, single-create custom recipe uploads.
   EnableFunctionUrl:
     Type: String
     AllowedValues: ['true', 'false']
@@ -74,6 +79,13 @@ Resources:
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${EmailParameterName}
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${PasswordParameterName}
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${OriginBearerParameterName}
+        - PolicyName: ReserveOwnCustomRecipeTitles
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub arn:${AWS::Partition}:s3:::${CodeBucket}/cookidoo-mcp/write-guards/*
         - PolicyName: WriteOwnLogsOnly
           PolicyDocument:
             Version: '2012-10-17'
@@ -105,6 +117,8 @@ Resources:
           COOKIDOO_LANGUAGE: en-GB
           COOKIDOO_DEVICE: TM7
           COOKIDOO_EMAIL_PARAM: !Ref EmailParameterName
+          COOKIDOO_RECIPE_CREATION_ENABLED: !Ref EnableRecipeCreation
+          COOKIDOO_WRITE_GUARD_BUCKET: !Ref CodeBucket
           COOKIDOO_PASSWORD_PARAM: !Ref PasswordParameterName
           ORIGIN_BEARER_PARAM: !Ref OriginBearerParameterName
           CF_ACCESS_TEAM_DOMAIN: !Ref CloudflareTeamDomain
