@@ -14,7 +14,7 @@ case "${RELEASE_CONFIRMATION:-}" in
   ENABLE-COOKIDOO-RECIPE-UPDATES) action=enable-updates ;;
   DISABLE-COOKIDOO-RECIPE-UPDATES) action=disable-updates ;;
   *)
-    echo "::error::Invalid confirmation. Enter exactly one of one of the exact action codes shown in the workflow form, with no trailing punctuation or comma." >&2
+    echo "::error::Invalid confirmation. Enter exactly one of the action codes shown in the workflow form, with no trailing punctuation or comma." >&2
     exit 1
     ;;
 esac
