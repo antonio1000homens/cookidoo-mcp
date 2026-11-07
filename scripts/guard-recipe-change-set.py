@@ -2,7 +2,7 @@
 """Reject CloudFormation change sets outside the Cookidoo recipe-release scope.
 
 Only a single in-place Lambda Function change is permitted. This intentionally
-fails closed for existing IAM drift (#16), dynamic/ambiguous changes, nested
+fails closed for IAM drift (#16), unverified dynamic changes, nested
 stacks, resource additions/removals, and any unexpected parameter transition.
 
 The change set being inspected MUST be the exact ARN later executed.
@@ -29,6 +29,52 @@ FLAG_ACTIONS = {
 }
 CODE_ACTIONS = {"deploy-disabled", "deploy-update-code"}
 
+# The first update release adds precisely one flag and its Lambda variable.
+# Other template deltas are forbidden in the recipe-tools release path.
+_NEW_PARAMETER = """  EnableRecipeUpdates:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+    Description: Independently enable explicitly approved updates to owned custom recipes.
+"""
+_NEW_ENVIRONMENT = (
+    "          COOKIDOO_RECIPE_UPDATES_ENABLED: !Ref EnableRecipeUpdates\n"
+)
+
+
+def _template_matches_existing(existing: str | None, proposed: str | None) -> bool:
+    """Prove any direct Environment modification has a reviewed template delta."""
+    if not isinstance(existing, str) or not isinstance(proposed, str):
+        return False
+    original = existing.rstrip("\n") + "\n"
+    approved = proposed.rstrip("\n") + "\n"
+    if original == approved:
+        return True
+    if approved.count(_NEW_PARAMETER) != 1 or approved.count(_NEW_ENVIRONMENT) != 1:
+        return False
+    return approved.replace(_NEW_PARAMETER, "", 1).replace(
+        _NEW_ENVIRONMENT, "", 1
+    ) == original
+
+
+def _expected_environment(params: dict[str, str], *, old_format: bool) -> dict[str, str]:
+    """Explicitly bind all current Lambda environment values to stack params."""
+    expected = {
+        "COOKIDOO_COUNTRY": "gb",
+        "COOKIDOO_LANGUAGE": "en-GB",
+        "COOKIDOO_DEVICE": "TM7",
+        "COOKIDOO_EMAIL_PARAM": params["EmailParameterName"],
+        "COOKIDOO_RECIPE_CREATION_ENABLED": params["EnableRecipeCreation"],
+        "COOKIDOO_WRITE_GUARD_BUCKET": params["CodeBucket"],
+        "COOKIDOO_PASSWORD_PARAM": params["PasswordParameterName"],
+        "ORIGIN_BEARER_PARAM": params["OriginBearerParameterName"],
+        "CF_ACCESS_TEAM_DOMAIN": params["CloudflareTeamDomain"],
+        "CF_ACCESS_AUD": params["CloudflareAudience"],
+    }
+    if not old_format:
+        expected["COOKIDOO_RECIPE_UPDATES_ENABLED"] = params["EnableRecipeUpdates"]
+    return expected
+
 
 class UnsafeChangeSet(ValueError):
     """The requested deployment contains an unreviewed or ambiguous change."""
@@ -51,6 +97,9 @@ def _parameters(entries: object) -> dict[str, str]:
 def validate(
     change_set: dict, stack: dict, *,
     action: str, code_key: str, creation: str, updates: str,
+    existing_template: str | None = None,
+    proposed_template: str | None = None,
+    current_env: dict[str, str] | None = None,
 ) -> list[str]:
     """Validate a complete DescribeChangeSet response against current stack."""
     if action not in CODE_ACTIONS | FLAG_ACTIONS.keys():
@@ -74,6 +123,7 @@ def validate(
         raise UnsafeChangeSet("Current stack name mismatch")
 
     old = _parameters(existing_stack.get("Parameters"))
+    first_rollout = "EnableRecipeUpdates" not in old
     # On the first deployment of this template, EnableRecipeUpdates is absent
     # from the old stack. Treat that absent flag as the default disabled state.
     if "EnableRecipeUpdates" not in old:
@@ -82,6 +132,11 @@ def validate(
         raise UnsafeChangeSet("Unexpected parameters in current stack")
     if old["EnableFunctionUrl"] != "true":
         raise UnsafeChangeSet("Existing Function URL is not enabled")
+    if any(x is not None for x in (existing_template, proposed_template, current_env)):
+        if not _template_matches_existing(existing_template, proposed_template):
+            raise UnsafeChangeSet("Unreviewed CloudFormation template changes")
+        if current_env != _expected_environment(old, old_format=first_rollout):
+            raise UnsafeChangeSet("Current Lambda environment does not match stack parameters")
 
     expected = dict(old)
     expected["CodeKey"] = code_key
@@ -144,8 +199,24 @@ def validate(
             target.get("Attribute") != "Properties"
             or name not in allowed_props
             or target.get("RequiresRecreation") != "Never"
-            or detail.get("Evaluation") != "Static"
         ):
+            raise UnsafeChangeSet(
+                "Dynamic, replacement, or unexpected Lambda property modification"
+            )
+        if detail.get("Evaluation") == "Static":
+            pass
+        elif (
+            detail.get("Evaluation") == "Dynamic"
+            and detail.get("ChangeSource") == "DirectModification"
+            and name == "Environment"
+            and _template_matches_existing(existing_template, proposed_template)
+            and current_env == _expected_environment(old, old_format=first_rollout)
+        ):
+            # CloudFormation reports a dynamic direct Environment change even
+            # when the only template delta adds the reviewed update flag.
+            # Only allow after verifying the complete template and live env.
+            pass
+        else:
             raise UnsafeChangeSet(
                 "Dynamic, replacement, or unexpected Lambda property modification"
             )
@@ -163,6 +234,9 @@ def main() -> int:
     parser.add_argument("--code-key", required=True)
     parser.add_argument("--creation", required=True)
     parser.add_argument("--updates", required=True)
+    parser.add_argument("--existing-template", type=Path, required=True)
+    parser.add_argument("--proposed-template", type=Path, required=True)
+    parser.add_argument("--current-env", type=Path, required=True)
     args = parser.parse_args()
     try:
         approved = validate(
@@ -172,6 +246,9 @@ def main() -> int:
             code_key=args.code_key,
             creation=args.creation,
             updates=args.updates,
+            existing_template=args.existing_template.read_text(encoding="utf-8"),
+            proposed_template=args.proposed_template.read_text(encoding="utf-8"),
+            current_env=json.loads(args.current_env.read_text(encoding="utf-8")),
         )
     except (UnsafeChangeSet, ValueError, OSError, TypeError, KeyError) as exc:
         print(
