@@ -79,19 +79,73 @@ case "$RELEASE_ACTION" in
     ;;
 esac
 
-aws cloudformation deploy --region "$AWS_REGION" --stack-name cookidoo-mcp \
-  --template-file infrastructure/cookidoo.yaml \
+# Do not call 'aws cloudformation deploy' here. In particular, existing
+# CloudFormation drift in issue #16 MUST NOT be silently reconciled by a
+# recipe release. Inspect and execute the *same* immutable change-set ARN.
+change_set_dir="$(mktemp -d)"
+chmod 700 "$change_set_dir"
+change_set_arn=''
+cleanup() {
+  if [[ -n "$change_set_arn" ]]; then
+    # Safe to attempt deletion after execution; ignore already-executed sets.
+    aws cloudformation delete-change-set --region "$AWS_REGION" \
+      --stack-name cookidoo-mcp --change-set-name "$change_set_arn" >/dev/null 2>&1 || true
+  fi
+  rm -rf "$change_set_dir"
+}
+trap cleanup EXIT
+
+printf '%s' "$stack" > "$change_set_dir/current-stack.json"
+# Retain the current approved configuration. Only the deliberately requested
+# CodeKey and feature flags may differ from the existing stack parameters.
+jq --arg code "$code_key" --arg creation "$enabled" --arg updates "$updates" '
+  [.Stacks[0].Parameters[]
+   | select(.ParameterKey != "CodeKey" and
+            .ParameterKey != "EnableRecipeCreation" and
+            .ParameterKey != "EnableRecipeUpdates")
+   | {ParameterKey, ParameterValue}]
+  + [
+      {ParameterKey:"CodeKey", ParameterValue:$code},
+      {ParameterKey:"EnableRecipeCreation", ParameterValue:$creation},
+      {ParameterKey:"EnableRecipeUpdates", ParameterValue:$updates}
+    ]
+' "$change_set_dir/current-stack.json" > "$change_set_dir/requested-parameters.json"
+
+[[ -n "${GITHUB_RUN_ID:-}" && -n "${GITHUB_RUN_ATTEMPT:-}" ]] || {
+  echo 'Missing GitHub Actions run identity; change set not created' >&2; exit 1;
+}
+change_set_name="cookidoo-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RELEASE_ACTION}"
+change_set_arn="$(aws cloudformation create-change-set --region "$AWS_REGION" \
+  --stack-name cookidoo-mcp --change-set-name "$change_set_name" \
+  --change-set-type UPDATE --template-body file://infrastructure/cookidoo.yaml \
   --role-arn "$AWS_CLOUDFORMATION_ROLE_ARN" --capabilities CAPABILITY_NAMED_IAM \
-  --no-fail-on-empty-changeset --parameter-overrides \
-  "FunctionName=$(parameter FunctionName)" \
-  "CodeBucket=$(parameter CodeBucket)" "CodeKey=$code_key" \
-  "EmailParameterName=$(parameter EmailParameterName)" \
-  "PasswordParameterName=$(parameter PasswordParameterName)" \
-  "OriginBearerParameterName=$(parameter OriginBearerParameterName)" \
-  "CloudflareTeamDomain=$(parameter CloudflareTeamDomain)" \
-  "CloudflareAudience=$(parameter CloudflareAudience)" \
-  "EnableFunctionUrl=true" "EnableRecipeCreation=$enabled" \
-  "EnableRecipeUpdates=$updates"
+  --parameters "file://$change_set_dir/requested-parameters.json" \
+  --query Id --output text)"
+[[ "$change_set_arn" == arn:aws:cloudformation:eu-west-2:*:changeSet/* ]] || {
+  echo 'Could not obtain a valid CloudFormation change set ARN' >&2; exit 1;
+}
+if ! aws cloudformation wait change-set-create-complete --region "$AWS_REGION" \
+  --stack-name cookidoo-mcp --change-set-name "$change_set_arn"; then
+  echo '::error::Change set creation failed or contains no executable changes; no deployment attempted.' >&2
+  exit 1
+fi
+
+aws cloudformation describe-change-set --region "$AWS_REGION" \
+  --stack-name cookidoo-mcp --change-set-name "$change_set_arn" \
+  --output json > "$change_set_dir/change-set.json"
+python3 scripts/guard-recipe-change-set.py \
+  --change-set "$change_set_dir/change-set.json" \
+  --stack "$change_set_dir/current-stack.json" \
+  --action "$RELEASE_ACTION" --code-key "$code_key" \
+  --creation "$enabled" --updates "$updates"
+
+# Only execute the ARN verified above; never regenerate a change set between
+# inspection and execution. One repository-wide release concurrency group
+# serialises normal releases; out-of-band changes fail the resource allowlist.
+aws cloudformation execute-change-set --region "$AWS_REGION" \
+  --stack-name cookidoo-mcp --change-set-name "$change_set_arn"
+aws cloudformation wait stack-update-complete --region "$AWS_REGION" \
+  --stack-name cookidoo-mcp
 
 aws lambda wait function-updated-v2 --region "$AWS_REGION" --function-name cookidoo-mcp
 new_url="$(aws lambda get-function-url-config --region "$AWS_REGION" \
