@@ -10,8 +10,11 @@ case "${RELEASE_CONFIRMATION:-}" in
   DEPLOY-COOKIDOO-WRITES-DISABLED) action=deploy-disabled ;;
   ENABLE-COOKIDOO-RECIPE-CREATION) action=enable-writes ;;
   DISABLE-COOKIDOO-RECIPE-CREATION) action=disable-writes ;;
+  DEPLOY-COOKIDOO-RECIPE-UPDATE-CODE) action=deploy-update-code ;;
+  ENABLE-COOKIDOO-RECIPE-UPDATES) action=enable-updates ;;
+  DISABLE-COOKIDOO-RECIPE-UPDATES) action=disable-updates ;;
   *)
-    echo "::error::Invalid confirmation. Enter exactly one of the three action codes shown in the workflow form, with no trailing punctuation or comma." >&2
+    echo "::error::Invalid confirmation. Enter exactly one of one of the exact action codes shown in the workflow form, with no trailing punctuation or comma." >&2
     exit 1
     ;;
 esac
