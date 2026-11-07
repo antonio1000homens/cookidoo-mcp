@@ -24,6 +24,9 @@ def invoke(confirmation, action=None, branch="refs/heads/master"):
     ("DEPLOY-COOKIDOO-WRITES-DISABLED", "deploy-disabled"),
     ("ENABLE-COOKIDOO-RECIPE-CREATION", "enable-writes"),
     ("DISABLE-COOKIDOO-RECIPE-CREATION", "disable-writes"),
+    ("DEPLOY-COOKIDOO-RECIPE-UPDATE-CODE", "deploy-update-code"),
+    ("ENABLE-COOKIDOO-RECIPE-UPDATES", "enable-updates"),
+    ("DISABLE-COOKIDOO-RECIPE-UPDATES", "disable-updates"),
 ])
 def test_confirmation_determines_action(confirmation, operation):
     result = invoke(confirmation)
@@ -38,6 +41,7 @@ def test_confirmation_determines_action(confirmation, operation):
     "ENABLE-COOKIDOO-RECIPE-CREATION ",
     "enable-writes",
     "disable-writes",
+    "ENABLE-COOKIDOO-RECIPE-UPDATES,",
 ])
 def test_invalid_confirmation_fails_visibly(confirmation):
     result = invoke(confirmation)

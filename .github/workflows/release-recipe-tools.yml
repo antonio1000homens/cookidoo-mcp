@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: 'Type ONE exact action code: DEPLOY-COOKIDOO-WRITES-DISABLED, ENABLE-COOKIDOO-RECIPE-CREATION or DISABLE-COOKIDOO-RECIPE-CREATION (no comma)'
+        description: 'One code: DEPLOY-COOKIDOO-WRITES-DISABLED; ENABLE-COOKIDOO-RECIPE-CREATION; DISABLE-COOKIDOO-RECIPE-CREATION; DEPLOY-COOKIDOO-RECIPE-UPDATE-CODE; ENABLE-COOKIDOO-RECIPE-UPDATES; DISABLE-COOKIDOO-RECIPE-UPDATES'
         required: true
         type: string
 
@@ -35,7 +35,7 @@ jobs:
           bash -n scripts/release-recipe-tools.sh
           uvx --from cfn-lint==1.53.3 cfn-lint infrastructure/cookidoo.yaml infrastructure/bootstrap-github.yaml
       - name: Fetch pinned upstream, install and run offline tests
-        if: steps.confirm.outputs.action != 'disable-writes'
+        if: steps.confirm.outputs.action != 'disable-writes' && steps.confirm.outputs.action != 'disable-updates'
         run: |
           set -euo pipefail
           git clone --quiet https://github.com/alexandrepa/mcp-cookidoo.git /tmp/cookidoo-upstream
@@ -48,10 +48,10 @@ jobs:
           )
           PYTHONPATH="$GITHUB_WORKSPACE:/tmp/cookidoo-upstream" /tmp/cookidoo-upstream/.venv/bin/python -m pytest -q tests
       - name: Build immutable Lambda ZIP (writes remain disabled)
-        if: steps.confirm.outputs.action == 'deploy-disabled'
+        if: steps.confirm.outputs.action == 'deploy-disabled' || steps.confirm.outputs.action == 'deploy-update-code'
         run: bash scripts/build-zip.sh
       - name: Preserve exact validated ZIP for deploy job
-        if: steps.confirm.outputs.action == 'deploy-disabled'
+        if: steps.confirm.outputs.action == 'deploy-disabled' || steps.confirm.outputs.action == 'deploy-update-code'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: cookidoo-recipe-tools-zip
@@ -77,7 +77,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Fetch validated ZIP (only for disabled code release)
-        if: needs.validate.outputs.action == 'deploy-disabled'
+        if: needs.validate.outputs.action == 'deploy-disabled' || needs.validate.outputs.action == 'deploy-update-code'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: cookidoo-recipe-tools-zip

@@ -7,7 +7,7 @@ bash scripts/validate-recipe-release-request.sh
 
 [[ "$GITHUB_ACTIONS" == "true" && "$GITHUB_REF" == "refs/heads/master" ]] || exit 1
 [[ "$AWS_REGION" == "eu-west-2" && "$CODE_BUCKET" == "aws2022-lambda-code" ]] || exit 1
-[[ "$RELEASE_ACTION" =~ ^(deploy-disabled|enable-writes|disable-writes)$ ]] || exit 1
+[[ "$RELEASE_ACTION" =~ ^(deploy-disabled|deploy-update-code|enable-writes|disable-writes|enable-updates|disable-updates)$ ]] || exit 1
 
 stack="$(aws cloudformation describe-stacks --region "$AWS_REGION" --stack-name cookidoo-mcp --output json)"
 parameter() {
@@ -29,12 +29,21 @@ old_url="$(aws lambda get-function-url-config --region "$AWS_REGION" \
 code_key="$(parameter CodeKey)"
 enabled="$(parameter EnableRecipeCreation 2>/dev/null || printf 'false')"
 [[ "$enabled" == "false" || "$enabled" == "true" ]] || exit 1
+updates="$(parameter EnableRecipeUpdates 2>/dev/null || printf 'false')"
+[[ "$updates" == "false" || "$updates" == "true" ]] || exit 1
 
 case "$RELEASE_ACTION" in
-  deploy-disabled)
-    [[ "$enabled" == "false" ]] || {
-      echo 'Disable existing recipe writes before releasing new code.' >&2; exit 1;
-    }
+  deploy-disabled|deploy-update-code)
+    if [[ "$RELEASE_ACTION" == 'deploy-disabled' ]]; then
+      [[ "$enabled" == "false" && "$updates" == "false" ]] || {
+        echo 'Disable all recipe writes before releasing in disabled mode.' >&2; exit 1;
+      }
+    else
+      [[ "$updates" == "false" ]] || {
+        echo 'Disable recipe updates before deploying updated code.' >&2; exit 1;
+      }
+      # Preserve the existing creation/image upload flag.
+    fi
     zip_path='dist/cookidoo-mcp.zip'
     [[ -s "$zip_path" ]] || exit 1
     code_key="cookidoo-mcp/$GITHUB_SHA/cookidoo-mcp.zip"
@@ -46,7 +55,7 @@ case "$RELEASE_ACTION" in
         --key "$code_key" --query Metadata.sha256 --output text)"
       [[ "$remote" == "$digest" ]] || { echo 'Immutable release mismatch' >&2; exit 1; }
     fi
-    enabled=false
+    if [[ "$RELEASE_ACTION" == 'deploy-disabled' ]]; then enabled=false; fi
     ;;
   enable-writes)
     [[ "$enabled" == "false" ]] || { echo 'Writes already enabled' >&2; exit 1; }
@@ -58,20 +67,85 @@ case "$RELEASE_ACTION" in
   disable-writes)
     enabled=false
     ;;
+  enable-updates)
+    [[ "$updates" == "false" ]] || { echo 'Recipe updates already enabled' >&2; exit 1; }
+    [[ "$code_key" == "cookidoo-mcp/$GITHUB_SHA/cookidoo-mcp.zip" ]] || {
+      echo 'Live release differs from this reviewed commit; deploy-update-code first.' >&2; exit 1;
+    }
+    updates=true
+    ;;
+  disable-updates)
+    updates=false
+    ;;
 esac
 
-aws cloudformation deploy --region "$AWS_REGION" --stack-name cookidoo-mcp \
-  --template-file infrastructure/cookidoo.yaml \
+# Do not call 'aws cloudformation deploy' here. In particular, existing
+# CloudFormation drift in issue #16 MUST NOT be silently reconciled by a
+# recipe release. Inspect and execute the *same* immutable change-set ARN.
+change_set_dir="$(mktemp -d)"
+chmod 700 "$change_set_dir"
+change_set_arn=''
+cleanup() {
+  if [[ -n "$change_set_arn" ]]; then
+    # Safe to attempt deletion after execution; ignore already-executed sets.
+    aws cloudformation delete-change-set --region "$AWS_REGION" \
+      --stack-name cookidoo-mcp --change-set-name "$change_set_arn" >/dev/null 2>&1 || true
+  fi
+  rm -rf "$change_set_dir"
+}
+trap cleanup EXIT
+
+printf '%s' "$stack" > "$change_set_dir/current-stack.json"
+# Retain the current approved configuration. Only the deliberately requested
+# CodeKey and feature flags may differ from the existing stack parameters.
+jq --arg code "$code_key" --arg creation "$enabled" --arg updates "$updates" '
+  [.Stacks[0].Parameters[]
+   | select(.ParameterKey != "CodeKey" and
+            .ParameterKey != "EnableRecipeCreation" and
+            .ParameterKey != "EnableRecipeUpdates")
+   | {ParameterKey, ParameterValue}]
+  + [
+      {ParameterKey:"CodeKey", ParameterValue:$code},
+      {ParameterKey:"EnableRecipeCreation", ParameterValue:$creation},
+      {ParameterKey:"EnableRecipeUpdates", ParameterValue:$updates}
+    ]
+' "$change_set_dir/current-stack.json" > "$change_set_dir/requested-parameters.json"
+
+[[ -n "${GITHUB_RUN_ID:-}" && -n "${GITHUB_RUN_ATTEMPT:-}" ]] || {
+  echo 'Missing GitHub Actions run identity; change set not created' >&2; exit 1;
+}
+change_set_name="cookidoo-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RELEASE_ACTION}"
+change_set_arn="$(aws cloudformation create-change-set --region "$AWS_REGION" \
+  --stack-name cookidoo-mcp --change-set-name "$change_set_name" \
+  --change-set-type UPDATE --template-body file://infrastructure/cookidoo.yaml \
   --role-arn "$AWS_CLOUDFORMATION_ROLE_ARN" --capabilities CAPABILITY_NAMED_IAM \
-  --no-fail-on-empty-changeset --parameter-overrides \
-  "FunctionName=$(parameter FunctionName)" \
-  "CodeBucket=$(parameter CodeBucket)" "CodeKey=$code_key" \
-  "EmailParameterName=$(parameter EmailParameterName)" \
-  "PasswordParameterName=$(parameter PasswordParameterName)" \
-  "OriginBearerParameterName=$(parameter OriginBearerParameterName)" \
-  "CloudflareTeamDomain=$(parameter CloudflareTeamDomain)" \
-  "CloudflareAudience=$(parameter CloudflareAudience)" \
-  "EnableFunctionUrl=true" "EnableRecipeCreation=$enabled"
+  --parameters "file://$change_set_dir/requested-parameters.json" \
+  --query Id --output text)"
+[[ "$change_set_arn" == arn:aws:cloudformation:eu-west-2:*:changeSet/* ]] || {
+  echo 'Could not obtain a valid CloudFormation change set ARN' >&2; exit 1;
+}
+if ! aws cloudformation wait change-set-create-complete --region "$AWS_REGION" \
+  --stack-name cookidoo-mcp --change-set-name "$change_set_arn"; then
+  echo '::error::Change set creation failed or contains no executable changes; no deployment attempted.' >&2
+  exit 1
+fi
+
+aws cloudformation describe-change-set --region "$AWS_REGION" \
+  --stack-name cookidoo-mcp --change-set-name "$change_set_arn" \
+  --output json > "$change_set_dir/change-set.json"
+python3 scripts/guard-recipe-change-set.py \
+  --change-set "$change_set_dir/change-set.json" \
+  --stack "$change_set_dir/current-stack.json" \
+  --action "$RELEASE_ACTION" --code-key "$code_key" \
+  --creation "$enabled" --updates "$updates"
+
+# Only execute the ARN verified above; never regenerate a change set between
+# inspection and execution. One repository-wide release concurrency group
+# serialises normal releases; out-of-band changes fail the resource allowlist.
+aws cloudformation execute-change-set --region "$AWS_REGION" \
+  --stack-name cookidoo-mcp --change-set-name "$change_set_arn"
+aws cloudformation wait stack-update-complete --region "$AWS_REGION" \
+  --stack-name cookidoo-mcp
 
 aws lambda wait function-updated-v2 --region "$AWS_REGION" --function-name cookidoo-mcp
 new_url="$(aws lambda get-function-url-config --region "$AWS_REGION" \
@@ -81,10 +155,15 @@ flag="$(aws lambda get-function-configuration --region "$AWS_REGION" \
   --function-name cookidoo-mcp \
   --query 'Environment.Variables.COOKIDOO_RECIPE_CREATION_ENABLED' --output text)"
 [[ "$flag" == "$enabled" ]] || { echo 'Write state mismatch' >&2; exit 1; }
+update_flag="$(aws lambda get-function-configuration --region "$AWS_REGION" \
+  --function-name cookidoo-mcp \
+  --query 'Environment.Variables.COOKIDOO_RECIPE_UPDATES_ENABLED' --output text)"
+[[ "$update_flag" == "$updates" ]] || { echo 'Recipe update state mismatch' >&2; exit 1; }
 {
   echo '### Cookidoo MCP production release'
   echo "- Operation: $RELEASE_ACTION"
-  echo "- Recipe writes enabled: $enabled"
+  echo "- Recipe creation enabled: $enabled"
+  echo "- In-place recipe updates enabled: $updates"
   echo '- Existing Lambda Function URL was preserved'
   echo '- No recipe was uploaded'
 } >> "$GITHUB_STEP_SUMMARY"
