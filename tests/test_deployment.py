@@ -108,8 +108,14 @@ def test_active_function_url_release_is_separately_confirmed():
     assert "ENABLE-COOKIDOO-RECIPE-CREATION" in workflow
     assert "DISABLE-COOKIDOO-RECIPE-CREATION" in workflow
     assert "cookidoo-mcp-release" in workflow
-    assert "EnableFunctionUrl=true" in release
-    assert "EnableRecipeCreation=$enabled" in release
+    assert '[[ "$(parameter EnableFunctionUrl)" == "true" ]]' in release
+    assert 'ParameterKey:"EnableRecipeCreation"' in release
+    assert 'ParameterKey:"EnableRecipeUpdates"' in release
+    assert "aws cloudformation create-change-set" in release
+    assert "aws cloudformation describe-change-set" in release
+    assert "python3 scripts/guard-recipe-change-set.py" in release
+    assert "aws cloudformation execute-change-set" in release
+    assert "aws cloudformation deploy --" not in release
     assert "CodeKey" in release
     assert "code_key" in release
     assert "deploy-disabled first" in release
