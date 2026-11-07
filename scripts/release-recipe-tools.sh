@@ -7,7 +7,7 @@ bash scripts/validate-recipe-release-request.sh
 
 [[ "$GITHUB_ACTIONS" == "true" && "$GITHUB_REF" == "refs/heads/master" ]] || exit 1
 [[ "$AWS_REGION" == "eu-west-2" && "$CODE_BUCKET" == "aws2022-lambda-code" ]] || exit 1
-[[ "$RELEASE_ACTION" =~ ^(deploy-disabled|enable-writes|disable-writes)$ ]] || exit 1
+[[ "$RELEASE_ACTION" =~ ^(deploy-disabled|deploy-update-code|enable-writes|disable-writes|enable-updates|disable-updates)$ ]] || exit 1
 
 stack="$(aws cloudformation describe-stacks --region "$AWS_REGION" --stack-name cookidoo-mcp --output json)"
 parameter() {
@@ -29,12 +29,21 @@ old_url="$(aws lambda get-function-url-config --region "$AWS_REGION" \
 code_key="$(parameter CodeKey)"
 enabled="$(parameter EnableRecipeCreation 2>/dev/null || printf 'false')"
 [[ "$enabled" == "false" || "$enabled" == "true" ]] || exit 1
+updates="$(parameter EnableRecipeUpdates 2>/dev/null || printf 'false')"
+[[ "$updates" == "false" || "$updates" == "true" ]] || exit 1
 
 case "$RELEASE_ACTION" in
-  deploy-disabled)
-    [[ "$enabled" == "false" ]] || {
-      echo 'Disable existing recipe writes before releasing new code.' >&2; exit 1;
-    }
+  deploy-disabled|deploy-update-code)
+    if [[ "$RELEASE_ACTION" == 'deploy-disabled' ]]; then
+      [[ "$enabled" == "false" && "$updates" == "false" ]] || {
+        echo 'Disable all recipe writes before releasing in disabled mode.' >&2; exit 1;
+      }
+    else
+      [[ "$updates" == "false" ]] || {
+        echo 'Disable recipe updates before deploying updated code.' >&2; exit 1;
+      }
+      # Preserve the existing creation/image upload flag.
+    fi
     zip_path='dist/cookidoo-mcp.zip'
     [[ -s "$zip_path" ]] || exit 1
     code_key="cookidoo-mcp/$GITHUB_SHA/cookidoo-mcp.zip"
@@ -46,7 +55,7 @@ case "$RELEASE_ACTION" in
         --key "$code_key" --query Metadata.sha256 --output text)"
       [[ "$remote" == "$digest" ]] || { echo 'Immutable release mismatch' >&2; exit 1; }
     fi
-    enabled=false
+    if [[ "$RELEASE_ACTION" == 'deploy-disabled' ]]; then enabled=false; fi
     ;;
   enable-writes)
     [[ "$enabled" == "false" ]] || { echo 'Writes already enabled' >&2; exit 1; }
@@ -57,6 +66,16 @@ case "$RELEASE_ACTION" in
     ;;
   disable-writes)
     enabled=false
+    ;;
+  enable-updates)
+    [[ "$updates" == "false" ]] || { echo 'Recipe updates already enabled' >&2; exit 1; }
+    [[ "$code_key" == "cookidoo-mcp/$GITHUB_SHA/cookidoo-mcp.zip" ]] || {
+      echo 'Live release differs from this reviewed commit; deploy-update-code first.' >&2; exit 1;
+    }
+    updates=true
+    ;;
+  disable-updates)
+    updates=false
     ;;
 esac
 
@@ -71,7 +90,8 @@ aws cloudformation deploy --region "$AWS_REGION" --stack-name cookidoo-mcp \
   "OriginBearerParameterName=$(parameter OriginBearerParameterName)" \
   "CloudflareTeamDomain=$(parameter CloudflareTeamDomain)" \
   "CloudflareAudience=$(parameter CloudflareAudience)" \
-  "EnableFunctionUrl=true" "EnableRecipeCreation=$enabled"
+  "EnableFunctionUrl=true" "EnableRecipeCreation=$enabled" \
+  "EnableRecipeUpdates=$updates"
 
 aws lambda wait function-updated-v2 --region "$AWS_REGION" --function-name cookidoo-mcp
 new_url="$(aws lambda get-function-url-config --region "$AWS_REGION" \
@@ -81,10 +101,15 @@ flag="$(aws lambda get-function-configuration --region "$AWS_REGION" \
   --function-name cookidoo-mcp \
   --query 'Environment.Variables.COOKIDOO_RECIPE_CREATION_ENABLED' --output text)"
 [[ "$flag" == "$enabled" ]] || { echo 'Write state mismatch' >&2; exit 1; }
+update_flag="$(aws lambda get-function-configuration --region "$AWS_REGION" \
+  --function-name cookidoo-mcp \
+  --query 'Environment.Variables.COOKIDOO_RECIPE_UPDATES_ENABLED' --output text)"
+[[ "$update_flag" == "$updates" ]] || { echo 'Recipe update state mismatch' >&2; exit 1; }
 {
   echo '### Cookidoo MCP production release'
   echo "- Operation: $RELEASE_ACTION"
-  echo "- Recipe writes enabled: $enabled"
+  echo "- Recipe creation enabled: $enabled"
+  echo "- In-place recipe updates enabled: $updates"
   echo '- Existing Lambda Function URL was preserved'
   echo '- No recipe was uploaded'
 } >> "$GITHUB_STEP_SUMMARY"
