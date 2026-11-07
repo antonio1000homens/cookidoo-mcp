@@ -219,6 +219,118 @@ def test_source_script_executes_exact_arn_only_after_validator():
     assert "--parameters \"file://$change_set_dir/requested-parameters.json\"" in script
 
 
+
+def _valid_dynamic_case():
+    """Mirror live 7 November preflight: Environment Static + Direct Dynamic."""
+    stack, change_set, args = case("deploy-update-code", missing_update_flag=True)
+    approved_template = (
+        Path(__file__).resolve().parents[1] / "infrastructure/cookidoo.yaml"
+    ).read_text(encoding="utf-8")
+    previous_template = approved_template.replace(guard._NEW_PARAMETER, "").replace(
+        guard._NEW_ENVIRONMENT, ""
+    )
+    old_params = dict(BASE, EnableRecipeCreation="true")
+    old_params.pop("EnableRecipeUpdates")
+    before_env = guard._expected_environment(
+        {**old_params, "EnableRecipeUpdates": "false"}, old_format=True
+    )
+    change_set["Changes"][0]["ResourceChange"]["Details"].append({
+        "Target": {
+            "Attribute": "Properties", "Name": "Environment",
+            "RequiresRecreation": "Never",
+        },
+        "Evaluation": "Dynamic",
+        "ChangeSource": "DirectModification",
+    })
+    return stack, change_set, args, previous_template, approved_template, before_env
+
+
+def test_preflight_allows_exact_live_template_delta_with_verified_dynamic_environment():
+    stack, change_set, args, original, proposed, env = _valid_dynamic_case()
+    assert guard._template_matches_existing(original, proposed)
+    assert guard.validate(
+        change_set, stack, **args,
+        existing_template=original, proposed_template=proposed, current_env=env,
+    ) == ["Code", "Environment"]
+
+
+@pytest.mark.parametrize("tamper", [
+    "runtime_value", "extra_env_key", "remove_env_key",
+    "template_iam", "template_auth", "template_extra",
+    "changed_dynamic_source", "dynamic_code", "changed_target",
+    "dynamic_replacement", "missing_snapshot",
+])
+def test_preflight_rejects_unverified_dynamic_environment_changes(tamper):
+    stack, change_set, args, original, proposed, env = _valid_dynamic_case()
+    if tamper == "runtime_value":
+        env["COOKIDOO_RECIPE_CREATION_ENABLED"] = "false"
+    elif tamper == "extra_env_key":
+        env["UNREVIEWED_SECRET"] = "unexpected"
+    elif tamper == "remove_env_key":
+        env.pop("ORIGIN_BEARER_PARAM")
+    elif tamper == "template_iam":
+        proposed = proposed.replace("Action: ssm:GetParameter", "Action: ssm:*")
+    elif tamper == "template_auth":
+        proposed = proposed.replace("ORIGIN_BEARER_PARAM: !Ref OriginBearerParameterName",
+                                    "ORIGIN_BEARER_PARAM: changed")
+    elif tamper == "template_extra":
+        proposed += "\n# Unreviewed change\n"
+    elif tamper == "changed_dynamic_source":
+        change_set["Changes"][0]["ResourceChange"]["Details"][-1][
+            "ChangeSource"
+        ] = "ResourceReference"
+    elif tamper == "dynamic_code":
+        change_set["Changes"][0]["ResourceChange"]["Details"][-1][
+            "Target"
+        ]["Name"] = "Code"
+    elif tamper == "changed_target":
+        change_set["Changes"][0]["ResourceChange"]["Details"][-1][
+            "Target"
+        ]["Attribute"] = "Metadata"
+    elif tamper == "dynamic_replacement":
+        change_set["Changes"][0]["ResourceChange"]["Details"][-1][
+            "Target"
+        ]["RequiresRecreation"] = "Conditionally"
+    elif tamper == "missing_snapshot":
+        original = None
+    with pytest.raises(guard.UnsafeChangeSet):
+        guard.validate(
+            change_set, stack, **args,
+            existing_template=original, proposed_template=proposed,
+            current_env=env,
+        )
+
+
+def test_after_initial_rollout_identical_template_dynamic_env_is_verified():
+    stack, change_set, args = case("enable-updates")
+    new_template = (
+        Path(__file__).resolve().parents[1] / "infrastructure/cookidoo.yaml"
+    ).read_text(encoding="utf-8")
+    before_env = guard._expected_environment(BASE, old_format=False)
+    change_set["Changes"][0]["ResourceChange"]["Details"].append({
+        "Target": {
+            "Attribute": "Properties", "Name": "Environment",
+            "RequiresRecreation": "Never",
+        },
+        "Evaluation": "Dynamic", "ChangeSource": "DirectModification",
+    })
+    assert guard.validate(
+        change_set, stack, **args, existing_template=new_template,
+        proposed_template=new_template, current_env=before_env,
+    ) == ["Environment"]
+
+
+def test_guard_script_reads_live_template_and_environment_and_compares_post_state():
+    script = (SCRIPT.parent / "release-recipe-tools.sh").read_text(encoding="utf-8")
+    assert "aws cloudformation get-template" in script
+    assert "aws lambda get-function-configuration" in script
+    assert "--existing-template" in script and "--proposed-template" in script
+    assert "--current-env" in script
+    assert "deployed-env.json" in script
+    assert "COOKIDOO_RECIPE_CREATION_ENABLED: $creation" in script
+    assert "COOKIDOO_RECIPE_UPDATES_ENABLED: $updates" in script
+
+
 def test_release_confirmation_error_is_clear():
     source = (SCRIPT.parent / "validate-recipe-release-request.sh").read_text(encoding="utf-8")
     assert "one of one of" not in source
