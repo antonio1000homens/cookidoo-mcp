@@ -2,7 +2,7 @@
 
 The pinned upstream registers unsafe mutation tools by default. Instead,
 construct a new server with an explicit read allowlist and separately gated,
-reviewable recipe creation. Updating/deleting existing recipes stays disabled.
+reviewable recipe creation and separately gated in-place updates. Deletion stays disabled.
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from schemas import Step
 from src.auth import AccessGate, AccessVerifier
 from src.config import ensure_credentials
 from src.recipe_creation import create, preview
+from src.recipe_updates import preview as preview_update, update as apply_update
 from src.recipe_images import preview as preview_image, upload as upload_image
 from src.recipe_image_copy import preview as preview_image_copy, copy as copy_image
 
@@ -53,7 +54,7 @@ def build_mcp() -> FastMCP:
             "Search and inspect Cookidoo recipes and prepare validated recipes. "
             "Creating a custom recipe requires a validated full preview, explicit user approval, "
             "an exact-content confirmation, and server-side write enablement. "
-            "Never create from a preview alone; never update or delete existing recipes."
+            "Never write from a preview alone; updating existing recipes requires a separate exact-content preview and approval. Never delete recipes."
         ),
         lifespan=lifespan,
     )
@@ -125,6 +126,21 @@ def build_mcp() -> FastMCP:
         and ask for explicit approval before any creation tool call.
         """
         return preview(recipe_json)
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def preview_custom_recipe_update(recipe_id: str, recipe_json: str) -> str:
+        """Preview replacing one owned recipe in place, without writing.
+
+        The approval fingerprint covers both the live source recipe (including
+        its existing image and raw guided steps) and the full proposed recipe.
+        Show the full proposed content and obtain explicit user approval before
+        calling update_custom_recipe.
+        """
+        return await preview_update(
+            recipe_id, recipe_json,
+            ensure_credentials=ensure_credentials,
+            get_service=upstream._get_service,
+        )
 
     @mcp.tool(annotations=READ_ONLY)
     async def preview_custom_recipe_image(recipe_id: str, image_url: str) -> str:
@@ -216,6 +232,27 @@ def build_mcp() -> FastMCP:
             return await copy_image(
                 source_recipe_id, destination_recipe_id, confirmation,
                 replace_existing, ensure_credentials=ensure_credentials,
+                get_service=upstream._get_service,
+            )
+
+    # Updates have an independent, default-off production gate. Enabling them
+    # must not inadvertently enable new-recipe creation or image mutation.
+    if os.environ.get("COOKIDOO_RECIPE_UPDATES_ENABLED") == "true":
+        @mcp.tool(annotations={**WRITE, "destructiveHint": True})
+        async def update_custom_recipe(
+            recipe_id: str, recipe_json: str, confirmation: str,
+        ) -> str:
+            """Replace one approved Cookidoo custom recipe in place.
+
+            First call preview_custom_recipe_update with exactly the same ID
+            and JSON. Show the current and proposed content and explicitly
+            obtain approval for the returned confirmation. Refuse any stale
+            approval, preserve the existing image, verify the guided settings
+            after the write and never retry an ambiguous failure automatically.
+            """
+            return await apply_update(
+                recipe_id, recipe_json, confirmation,
+                ensure_credentials=ensure_credentials,
                 get_service=upstream._get_service,
             )
 
