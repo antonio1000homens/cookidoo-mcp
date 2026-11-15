@@ -23,6 +23,7 @@ from src.recipe_creation import create, preview
 from src.recipe_updates import preview as preview_update, update as apply_update
 from src.recipe_images import preview as preview_image, upload as upload_image
 from src.recipe_image_copy import preview as preview_image_copy, copy as copy_image
+from src.meal_planner import get_week as read_meal_plan, schedule as schedule_meal
 
 READ_ONLY = {"readOnlyHint": True, "openWorldHint": True}
 WRITE = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True}
@@ -91,6 +92,18 @@ def build_mcp() -> FastMCP:
     async def get_custom_recipe(recipe_id: str) -> str:
         """Read a custom recipe including editable structured guided settings."""
         return await _call(upstream.get_custom_recipe, recipe_id=recipe_id)
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def get_calendar_week(day: str) -> str:
+        """Read Cookidoo My Week for the week containing YYYY-MM-DD.
+
+        Includes catalogue recipes and resolves custom recipe names. Use this
+        before scheduling to check what is already planned.
+        """
+        return await read_meal_plan(
+            day, ensure_credentials=ensure_credentials,
+            get_service=upstream._get_service,
+        )
 
     @mcp.tool(annotations=READ_ONLY)
     async def generate_recipe_structure(
@@ -252,6 +265,27 @@ def build_mcp() -> FastMCP:
             """
             return await apply_update(
                 recipe_id, recipe_json, confirmation,
+                ensure_credentials=ensure_credentials,
+                get_service=upstream._get_service,
+            )
+
+    # Meal-plan writes are independent of recipe creation and editing rights.
+    # Read access is always available; scheduling is opt-in at deployment.
+    if os.environ.get("COOKIDOO_MEAL_PLANNING_WRITES_ENABLED") == "true":
+        @mcp.tool(annotations=WRITE)
+        async def schedule_recipe(
+            day: str, recipe_id: str, is_custom: bool = False,
+        ) -> str:
+            """Add one recipe to Cookidoo My Week on YYYY-MM-DD.
+
+            Find the ID using search_recipes or list_custom_recipes. Set
+            is_custom=true for user-created recipes. Check get_calendar_week
+            first; repeated calls for an existing entry are no-ops. This
+            changes your Cookidoo meal plan, not Google Calendar. If the
+            result is uncertain, read My Week before attempting another call.
+            """
+            return await schedule_meal(
+                day, recipe_id, is_custom,
                 ensure_credentials=ensure_credentials,
                 get_service=upstream._get_service,
             )
