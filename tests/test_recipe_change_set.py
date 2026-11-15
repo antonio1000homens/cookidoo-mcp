@@ -27,6 +27,7 @@ BASE = {
     "EnableFunctionUrl": "true",
     "EnableRecipeCreation": "false",
     "EnableRecipeUpdates": "false",
+    "EnableMealPlanningWrites": "false",
 }
 NEW_CODE = "cookidoo-mcp/abc123/cookidoo-mcp.zip"
 
@@ -66,6 +67,8 @@ def case(action, missing_update_flag=False):
     old = dict(BASE)
     if action == "disable-writes":
         old["EnableRecipeCreation"] = "true"
+    if action == "disable-planning":
+        old["EnableMealPlanningWrites"] = "true"
     if action == "disable-updates":
         old["EnableRecipeUpdates"] = "true"
     if action == "deploy-update-code":
@@ -94,6 +97,7 @@ def case(action, missing_update_flag=False):
         "code_key": new["CodeKey"],
         "creation": new["EnableRecipeCreation"],
         "updates": new["EnableRecipeUpdates"],
+        "planning": new["EnableMealPlanningWrites"],
     }
     return stack, change_set, flags
 
@@ -101,6 +105,7 @@ def case(action, missing_update_flag=False):
 @pytest.mark.parametrize("action", [
     "deploy-disabled", "deploy-update-code", "enable-writes",
     "disable-writes", "enable-updates", "disable-updates",
+    "enable-planning", "disable-planning",
 ])
 def test_allowed_single_lambda_in_place_change_for_all_release_actions(action):
     stack, change_set, args = case(action)
@@ -223,3 +228,13 @@ def test_release_confirmation_error_is_clear():
     source = (SCRIPT.parent / "validate-recipe-release-request.sh").read_text(encoding="utf-8")
     assert "one of one of" not in source
     assert "Enter exactly one of the action codes" in source
+
+
+def test_planning_flag_cannot_change_during_unrelated_release():
+    stack, change_set, args = case("deploy-update-code")
+    change_set["Parameters"] = params({
+        **BASE, "CodeKey": NEW_CODE, "EnableRecipeCreation": "true",
+        "EnableMealPlanningWrites": "true",
+    })
+    with pytest.raises(guard.UnsafeChangeSet, match="parameters differ"):
+        guard.validate(change_set, stack, **args)
