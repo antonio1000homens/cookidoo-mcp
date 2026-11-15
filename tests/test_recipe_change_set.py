@@ -289,6 +289,10 @@ def test_auto_deploy_dynamic_parameter_reference_is_not_allowed():
 def test_auto_deploy_rejects_incomplete_activation():
     stack, change_set, args = case("auto-deploy")
     args["planning"] = "false"
+    change_set["Parameters"] = params({
+        **BASE, "CodeKey": NEW_CODE,
+        "EnableRecipeCreation": "true", "EnableRecipeUpdates": "true",
+    })
     with pytest.raises(guard.UnsafeChangeSet, match="Automatic deployment must enable"):
         guard.validate(change_set, stack, **args)
 
