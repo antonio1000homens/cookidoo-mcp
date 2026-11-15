@@ -13,6 +13,8 @@ case "${RELEASE_CONFIRMATION:-}" in
   DEPLOY-COOKIDOO-RECIPE-UPDATE-CODE) action=deploy-update-code ;;
   ENABLE-COOKIDOO-RECIPE-UPDATES) action=enable-updates ;;
   DISABLE-COOKIDOO-RECIPE-UPDATES) action=disable-updates ;;
+  ENABLE-COOKIDOO-MEAL-PLANNING) action=enable-planning ;;
+  DISABLE-COOKIDOO-MEAL-PLANNING) action=disable-planning ;;
   *)
     echo "::error::Invalid confirmation. Enter exactly one of the action codes shown in the workflow form, with no trailing punctuation or comma." >&2
     exit 1
