@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -296,3 +298,41 @@ def test_auto_deploy_prohibits_iam_resource_changes():
     change_set["Changes"].append(resource("Policies", logical_id="CookidooRole", resource_type="AWS::IAM::Role"))
     with pytest.raises(guard.UnsafeChangeSet, match="exactly one"):
         guard.validate(change_set, stack, **args)
+
+
+@pytest.mark.parametrize(("event", "confirmation", "expected_success"), [
+    ("push", "AUTO-DEPLOY-ON-MASTER", True),
+    ("push", "DISABLE-COOKIDOO-MEAL-PLANNING", False),
+    ("workflow_dispatch", "AUTO-DEPLOY-ON-MASTER", False),
+    ("workflow_dispatch", "DISABLE-COOKIDOO-MEAL-PLANNING", True),
+])
+def test_automatic_deploy_authorized_only_on_master_push(event, confirmation, expected_success):
+    script = SCRIPT.parent / "validate-recipe-release-request.sh"
+    p = subprocess.run(
+        ["bash", str(script)],
+        env={
+            **os.environ,
+            "GITHUB_REF": "refs/heads/master",
+            "GITHUB_EVENT_NAME": event,
+            "RELEASE_CONFIRMATION": confirmation,
+        },
+        check=False, capture_output=True, text=True,
+    )
+    assert (p.returncode == 0) == expected_success, p.stderr
+    if expected_success and event == "push":
+        assert "action=auto-deploy" in p.stdout
+
+
+def test_auto_deploy_rejected_from_non_master_branch():
+    script = SCRIPT.parent / "validate-recipe-release-request.sh"
+    p = subprocess.run(
+        ["bash", str(script)],
+        env={
+            **os.environ,
+            "GITHUB_REF": "refs/heads/other",
+            "GITHUB_EVENT_NAME": "push",
+            "RELEASE_CONFIRMATION": "AUTO-DEPLOY-ON-MASTER",
+        },
+        check=False, capture_output=True, text=True,
+    )
+    assert p.returncode != 0
