@@ -31,6 +31,39 @@ Custom recipe updates are available behind a **separate, default-off** `EnableRe
 
 Defaults are `COOKIDOO_COUNTRY=gb`, `COOKIDOO_LANGUAGE=en-GB` and `COOKIDOO_DEVICE=TM7`.
 
+## Cookidoo My Week (meal planning)
+
+The Cookidoo app and the pinned `cookidoo-api==0.19.0` already support weekly
+planning for **both catalogue and user-created custom recipes**. The upstream
+`alexandrepa/mcp-cookidoo` server does not expose those operations; this
+repository provides an independently controlled adapter:
+
+- `get_calendar_week(day)` takes an ISO date (`YYYY-MM-DD`), is always
+  read-only, and returns the matching week with resolved custom-recipe names,
+  IDs, sources and recipe links.
+- `schedule_recipe(day, recipe_id, is_custom=false)` schedules **one**
+  Cookidoo recipe on that date. Obtain the ID using `search_recipes` or
+  `list_custom_recipes`. Set `is_custom=true` for a user-created recipe
+  (including `Chicken Madras TM7 – Browning Edition`).
+- Scheduling first reads the existing day, returns `already_scheduled` if the
+  recipe is present, and verifies a new entry after the write. A failed or
+  ambiguous network response requires a fresh `get_calendar_week` read
+  before attempting another write. Neither tool creates a Google Calendar
+  event or modifies the recipe.
+
+**Release safety:** `EnableMealPlanningWrites=false` is the CloudFormation
+default. This flag is independent of both recipe creation and recipe updates.
+Merging the code neither deploys it nor schedules a meal. After testing and
+review, use the existing **Cookidoo recipe tools - manual controlled release**
+workflow on `master`: deploy the reviewed code first using
+`DEPLOY-COOKIDOO-RECIPE-UPDATE-CODE`, then explicitly choose
+`ENABLE-COOKIDOO-MEAL-PLANNING`. The second step verifies the deployed ZIP
+matches that same reviewed commit. To remove the write capability independently,
+use `DISABLE-COOKIDOO-MEAL-PLANNING`. All changes remain subject to the
+existing CloudFormation change-set safety gate, including the known IAM drift
+restriction in issue #16. The reader is available once the code is deployed;
+the scheduler is advertised only while the separate flag is enabled.
+
 ## In-place editing existing custom recipes
 
 The upstream Cookidoo service already provides `update_custom_recipe` and uses Cookidoo's own update API; this wrapper does **not** delete and recreate a recipe. To edit your existing recipe without losing its ID or picture:

@@ -19,13 +19,15 @@ KNOWN_PARAMETERS = frozenset({
     "EmailParameterName", "PasswordParameterName",
     "OriginBearerParameterName", "CloudflareTeamDomain",
     "CloudflareAudience", "EnableFunctionUrl",
-    "EnableRecipeCreation", "EnableRecipeUpdates",
+    "EnableRecipeCreation", "EnableRecipeUpdates", "EnableMealPlanningWrites",
 })
 FLAG_ACTIONS = {
     "enable-writes": ("EnableRecipeCreation", "true"),
     "disable-writes": ("EnableRecipeCreation", "false"),
     "enable-updates": ("EnableRecipeUpdates", "true"),
     "disable-updates": ("EnableRecipeUpdates", "false"),
+    "enable-planning": ("EnableMealPlanningWrites", "true"),
+    "disable-planning": ("EnableMealPlanningWrites", "false"),
 }
 CODE_ACTIONS = {"deploy-disabled", "deploy-update-code"}
 
@@ -50,12 +52,12 @@ def _parameters(entries: object) -> dict[str, str]:
 
 def validate(
     change_set: dict, stack: dict, *,
-    action: str, code_key: str, creation: str, updates: str,
+    action: str, code_key: str, creation: str, updates: str, planning: str = "false",
 ) -> list[str]:
     """Validate a complete DescribeChangeSet response against current stack."""
     if action not in CODE_ACTIONS | FLAG_ACTIONS.keys():
         raise UnsafeChangeSet("Unknown release action")
-    if creation not in ("true", "false") or updates not in ("true", "false"):
+    if any(flag not in ("true", "false") for flag in (creation, updates, planning)):
         raise UnsafeChangeSet("Invalid requested feature switches")
     if change_set.get("Status") != "CREATE_COMPLETE" or (
         change_set.get("ExecutionStatus") != "AVAILABLE"
@@ -78,6 +80,8 @@ def validate(
     # from the old stack. Treat that absent flag as the default disabled state.
     if "EnableRecipeUpdates" not in old:
         old["EnableRecipeUpdates"] = "false"
+    if "EnableMealPlanningWrites" not in old:
+        old["EnableMealPlanningWrites"] = "false"
     if set(old) != KNOWN_PARAMETERS:
         raise UnsafeChangeSet("Unexpected parameters in current stack")
     if old["EnableFunctionUrl"] != "true":
@@ -87,6 +91,7 @@ def validate(
     expected["CodeKey"] = code_key
     expected["EnableRecipeCreation"] = creation
     expected["EnableRecipeUpdates"] = updates
+    expected["EnableMealPlanningWrites"] = planning
     if _parameters(change_set.get("Parameters")) != expected:
         raise UnsafeChangeSet("Change set parameters differ from approved release")
 
@@ -163,6 +168,7 @@ def main() -> int:
     parser.add_argument("--code-key", required=True)
     parser.add_argument("--creation", required=True)
     parser.add_argument("--updates", required=True)
+    parser.add_argument("--planning", required=True)
     args = parser.parse_args()
     try:
         approved = validate(
@@ -172,6 +178,7 @@ def main() -> int:
             code_key=args.code_key,
             creation=args.creation,
             updates=args.updates,
+            planning=args.planning,
         )
     except (UnsafeChangeSet, ValueError, OSError, TypeError, KeyError) as exc:
         print(

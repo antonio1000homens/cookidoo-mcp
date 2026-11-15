@@ -171,7 +171,7 @@ def test_lambda_mcp_initialize_and_tool_discovery_with_writes_enabled(monkeypatc
     assert tools["statusCode"] == 200, tools
     payload = json.loads(tools["body"])
     names = {item["name"] for item in payload["result"]["tools"]}
-    assert len(names) == 12, names
+    assert len(names) == 13, names
     assert "set_custom_recipe_image" in names
     assert "copy_custom_recipe_image" in names
     assert "upload_custom_recipe" in names
@@ -288,7 +288,7 @@ def test_modern_2026_mcp_discovery_and_tools_list_require_routing_headers(monkey
     names = {tool["name"] for tool in tools}
     assert "upload_custom_recipe" in names
     assert "preview_custom_recipe_upload" in names
-    assert len(names) == 12
+    assert len(names) == 13
 
     missing = runtime.handler(
         _event(

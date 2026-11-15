@@ -7,7 +7,7 @@ bash scripts/validate-recipe-release-request.sh
 
 [[ "$GITHUB_ACTIONS" == "true" && "$GITHUB_REF" == "refs/heads/master" ]] || exit 1
 [[ "$AWS_REGION" == "eu-west-2" && "$CODE_BUCKET" == "aws2022-lambda-code" ]] || exit 1
-[[ "$RELEASE_ACTION" =~ ^(deploy-disabled|deploy-update-code|enable-writes|disable-writes|enable-updates|disable-updates)$ ]] || exit 1
+[[ "$RELEASE_ACTION" =~ ^(deploy-disabled|deploy-update-code|enable-writes|disable-writes|enable-updates|disable-updates|enable-planning|disable-planning)$ ]] || exit 1
 
 stack="$(aws cloudformation describe-stacks --region "$AWS_REGION" --stack-name cookidoo-mcp --output json)"
 parameter() {
@@ -31,11 +31,13 @@ enabled="$(parameter EnableRecipeCreation 2>/dev/null || printf 'false')"
 [[ "$enabled" == "false" || "$enabled" == "true" ]] || exit 1
 updates="$(parameter EnableRecipeUpdates 2>/dev/null || printf 'false')"
 [[ "$updates" == "false" || "$updates" == "true" ]] || exit 1
+planning="$(parameter EnableMealPlanningWrites 2>/dev/null || printf 'false')"
+[[ "$planning" == "false" || "$planning" == "true" ]] || exit 1
 
 case "$RELEASE_ACTION" in
   deploy-disabled|deploy-update-code)
     if [[ "$RELEASE_ACTION" == 'deploy-disabled' ]]; then
-      [[ "$enabled" == "false" && "$updates" == "false" ]] || {
+      [[ "$enabled" == "false" && "$updates" == "false" && "$planning" == "false" ]] || {
         echo 'Disable all recipe writes before releasing in disabled mode.' >&2; exit 1;
       }
     else
@@ -77,6 +79,16 @@ case "$RELEASE_ACTION" in
   disable-updates)
     updates=false
     ;;
+  enable-planning)
+    [[ "$planning" == "false" ]] || { echo 'Meal planning already enabled' >&2; exit 1; }
+    [[ "$code_key" == "cookidoo-mcp/$GITHUB_SHA/cookidoo-mcp.zip" ]] || {
+      echo 'Live release differs from this reviewed commit; deploy-update-code first.' >&2; exit 1;
+    }
+    planning=true
+    ;;
+  disable-planning)
+    planning=false
+    ;;
 esac
 
 # Do not call 'aws cloudformation deploy' here. In particular, existing
@@ -98,16 +110,18 @@ trap cleanup EXIT
 printf '%s' "$stack" > "$change_set_dir/current-stack.json"
 # Retain the current approved configuration. Only the deliberately requested
 # CodeKey and feature flags may differ from the existing stack parameters.
-jq --arg code "$code_key" --arg creation "$enabled" --arg updates "$updates" '
+jq --arg code "$code_key" --arg creation "$enabled" --arg updates "$updates" --arg planning "$planning" '
   [.Stacks[0].Parameters[]
    | select(.ParameterKey != "CodeKey" and
             .ParameterKey != "EnableRecipeCreation" and
-            .ParameterKey != "EnableRecipeUpdates")
+            .ParameterKey != "EnableRecipeUpdates" and
+            .ParameterKey != "EnableMealPlanningWrites")
    | {ParameterKey, ParameterValue}]
   + [
       {ParameterKey:"CodeKey", ParameterValue:$code},
       {ParameterKey:"EnableRecipeCreation", ParameterValue:$creation},
-      {ParameterKey:"EnableRecipeUpdates", ParameterValue:$updates}
+      {ParameterKey:"EnableRecipeUpdates", ParameterValue:$updates},
+      {ParameterKey:"EnableMealPlanningWrites", ParameterValue:$planning}
     ]
 ' "$change_set_dir/current-stack.json" > "$change_set_dir/requested-parameters.json"
 
@@ -137,7 +151,7 @@ python3 scripts/guard-recipe-change-set.py \
   --change-set "$change_set_dir/change-set.json" \
   --stack "$change_set_dir/current-stack.json" \
   --action "$RELEASE_ACTION" --code-key "$code_key" \
-  --creation "$enabled" --updates "$updates"
+  --creation "$enabled" --updates "$updates" --planning "$planning"
 
 # Only execute the ARN verified above; never regenerate a change set between
 # inspection and execution. One repository-wide release concurrency group
@@ -159,11 +173,16 @@ update_flag="$(aws lambda get-function-configuration --region "$AWS_REGION" \
   --function-name cookidoo-mcp \
   --query 'Environment.Variables.COOKIDOO_RECIPE_UPDATES_ENABLED' --output text)"
 [[ "$update_flag" == "$updates" ]] || { echo 'Recipe update state mismatch' >&2; exit 1; }
+planning_flag="$(aws lambda get-function-configuration --region "$AWS_REGION" \
+  --function-name cookidoo-mcp \
+  --query 'Environment.Variables.COOKIDOO_MEAL_PLANNING_WRITES_ENABLED' --output text)"
+[[ "$planning_flag" == "$planning" ]] || { echo 'Meal plan scheduling state mismatch' >&2; exit 1; }
 {
   echo '### Cookidoo MCP production release'
   echo "- Operation: $RELEASE_ACTION"
   echo "- Recipe creation enabled: $enabled"
   echo "- In-place recipe updates enabled: $updates"
+  echo "- Meal planning writes enabled: $planning"
   echo '- Existing Lambda Function URL was preserved'
   echo '- No recipe was uploaded'
 } >> "$GITHUB_STEP_SUMMARY"
