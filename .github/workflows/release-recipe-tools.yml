@@ -49,7 +49,7 @@ jobs:
             uv pip install --python .venv/bin/python pytest==8.3.5 pytest-asyncio==0.26.0 httpx==0.28.1
           )
           PYTHONPATH="$GITHUB_WORKSPACE:/tmp/cookidoo-upstream" /tmp/cookidoo-upstream/.venv/bin/python -m pytest -q tests
-      - name: Build immutable Lambda ZIP (writes remain disabled)
+      - name: Build immutable Lambda ZIP for release
         if: steps.confirm.outputs.action == 'deploy-disabled' || steps.confirm.outputs.action == 'deploy-update-code' || steps.confirm.outputs.action == 'auto-deploy'
         run: bash scripts/build-zip.sh
       - name: Preserve exact validated ZIP for deploy job
@@ -79,7 +79,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Fetch validated ZIP (for code release)
-        if: needs.validate.outputs.action == 'deploy-disabled' || needs.validate.outputs.action == 'deploy-update-code'
+        if: needs.validate.outputs.action == 'deploy-disabled' || needs.validate.outputs.action == 'deploy-update-code' || needs.validate.outputs.action == 'auto-deploy'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: cookidoo-recipe-tools-zip
