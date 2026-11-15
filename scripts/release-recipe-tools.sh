@@ -7,7 +7,7 @@ bash scripts/validate-recipe-release-request.sh
 
 [[ "$GITHUB_ACTIONS" == "true" && "$GITHUB_REF" == "refs/heads/master" ]] || exit 1
 [[ "$AWS_REGION" == "eu-west-2" && "$CODE_BUCKET" == "aws2022-lambda-code" ]] || exit 1
-[[ "$RELEASE_ACTION" =~ ^(deploy-disabled|deploy-update-code|enable-writes|disable-writes|enable-updates|disable-updates|enable-planning|disable-planning)$ ]] || exit 1
+[[ "$RELEASE_ACTION" =~ ^(deploy-disabled|deploy-update-code|enable-writes|disable-writes|enable-updates|disable-updates|enable-planning|disable-planning|auto-deploy)$ ]] || exit 1
 
 stack="$(aws cloudformation describe-stacks --region "$AWS_REGION" --stack-name cookidoo-mcp --output json)"
 parameter() {
@@ -35,16 +35,28 @@ planning="$(parameter EnableMealPlanningWrites 2>/dev/null || printf 'false')"
 [[ "$planning" == "false" || "$planning" == "true" ]] || exit 1
 
 case "$RELEASE_ACTION" in
-  deploy-disabled|deploy-update-code)
+  auto-deploy|deploy-disabled|deploy-update-code)
+    if [[ "$RELEASE_ACTION" == 'auto-deploy' ]]; then
+      # A successful merge to master deploys code and enables all available
+      # recipe tools in one guarded CloudFormation release.
+      [[ "${GITHUB_EVENT_NAME:-}" == "push" ]] || {
+        echo 'Automatic release is permitted only on a master push.' >&2; exit 1;
+      }
+      enabled=true
+      updates=true
+      planning=true
+    fi
     if [[ "$RELEASE_ACTION" == 'deploy-disabled' ]]; then
       [[ "$enabled" == "false" && "$updates" == "false" && "$planning" == "false" ]] || {
         echo 'Disable all recipe writes before releasing in disabled mode.' >&2; exit 1;
       }
     else
-      [[ "$updates" == "false" ]] || {
-        echo 'Disable recipe updates before deploying updated code.' >&2; exit 1;
-      }
-      # Preserve the existing creation/image upload flag.
+      if [[ "$RELEASE_ACTION" == 'deploy-update-code' ]]; then
+        [[ "$updates" == "false" ]] || {
+          echo 'Disable recipe updates before deploying updated code.' >&2; exit 1;
+        }
+      fi
+      # Manual code releases preserve existing flags; auto-deploy enables them.
     fi
     zip_path='dist/cookidoo-mcp.zip'
     [[ -s "$zip_path" ]] || exit 1
@@ -184,5 +196,5 @@ planning_flag="$(aws lambda get-function-configuration --region "$AWS_REGION" \
   echo "- In-place recipe updates enabled: $updates"
   echo "- Meal planning writes enabled: $planning"
   echo '- Existing Lambda Function URL was preserved'
-  echo '- No recipe was uploaded'
+  echo '- No recipe was uploaded or scheduled by the release'
 } >> "$GITHUB_STEP_SUMMARY"

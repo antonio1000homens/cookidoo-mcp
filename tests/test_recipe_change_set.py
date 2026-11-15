@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -74,7 +76,12 @@ def case(action, missing_update_flag=False):
     if action == "deploy-update-code":
         old["EnableRecipeCreation"] = "true"
     new = dict(old)
-    if action.startswith("deploy-"):
+    if action == "auto-deploy":
+        new["CodeKey"] = NEW_CODE
+        for flag in ("EnableRecipeCreation", "EnableRecipeUpdates", "EnableMealPlanningWrites"):
+            new[flag] = "true"
+        changed_props = ("Code", "Environment")
+    elif action.startswith("deploy-"):
         new["CodeKey"] = NEW_CODE
         changed_props = ("Code", "Environment") if action == "deploy-update-code" else ("Code",)
     else:
@@ -105,12 +112,12 @@ def case(action, missing_update_flag=False):
 @pytest.mark.parametrize("action", [
     "deploy-disabled", "deploy-update-code", "enable-writes",
     "disable-writes", "enable-updates", "disable-updates",
-    "enable-planning", "disable-planning",
+    "enable-planning", "disable-planning", "auto-deploy",
 ])
 def test_allowed_single_lambda_in_place_change_for_all_release_actions(action):
     stack, change_set, args = case(action)
     approved = guard.validate(change_set, stack, **args)
-    assert "Code" in approved if action.startswith("deploy-") else approved == ["Environment"]
+    assert "Code" in approved if action.startswith("deploy-") or action == "auto-deploy" else approved == ["Environment"]
 
 
 def test_first_rollout_with_missing_update_flag_is_safe():
@@ -238,3 +245,98 @@ def test_planning_flag_cannot_change_during_unrelated_release():
     })
     with pytest.raises(guard.UnsafeChangeSet, match="parameters differ"):
         guard.validate(change_set, stack, **args)
+
+
+def test_auto_deploy_enables_every_tool_and_builds_code_in_single_change_set():
+    stack, change_set, args = case("auto-deploy")
+    assert (args["creation"], args["updates"], args["planning"]) == (
+        "true", "true", "true",
+    )
+    assert guard.validate(change_set, stack, **args) == ["Code", "Environment"]
+
+
+def test_auto_deploy_accepts_cloudformation_dynamic_direct_modification():
+    # Observed on real Cookidoo stack, 15 November 2026: Code and Environment
+    # have both Static/ParameterReference and Dynamic/DirectModification entries.
+    stack, change_set, args = case("auto-deploy")
+    for prop in ("Code", "Environment"):
+        change_set["Changes"][0]["ResourceChange"]["Details"].append({
+            **detail(prop, evaluation="Dynamic"),
+            "ChangeSource": "DirectModification",
+        })
+    assert guard.validate(change_set, stack, **args) == ["Code", "Environment"]
+
+
+def test_auto_deploy_fails_closed_on_unexpected_dynamic_property():
+    stack, change_set, args = case("auto-deploy")
+    change_set["Changes"][0]["ResourceChange"]["Details"].append({
+        **detail("Role", evaluation="Dynamic"),
+        "ChangeSource": "DirectModification",
+    })
+    with pytest.raises(guard.UnsafeChangeSet, match="unexpected Lambda property"):
+        guard.validate(change_set, stack, **args)
+
+
+def test_auto_deploy_dynamic_parameter_reference_is_not_allowed():
+    stack, change_set, args = case("auto-deploy")
+    change_set["Changes"][0]["ResourceChange"]["Details"].append(
+        detail("Environment", evaluation="Dynamic")
+    )
+    with pytest.raises(guard.UnsafeChangeSet, match="Dynamic change"):
+        guard.validate(change_set, stack, **args)
+
+
+def test_auto_deploy_rejects_incomplete_activation():
+    stack, change_set, args = case("auto-deploy")
+    args["planning"] = "false"
+    change_set["Parameters"] = params({
+        **BASE, "CodeKey": NEW_CODE,
+        "EnableRecipeCreation": "true", "EnableRecipeUpdates": "true",
+    })
+    with pytest.raises(guard.UnsafeChangeSet, match="Automatic deployment must enable"):
+        guard.validate(change_set, stack, **args)
+
+
+def test_auto_deploy_prohibits_iam_resource_changes():
+    stack, change_set, args = case("auto-deploy")
+    change_set["Changes"].append(resource("Policies", logical_id="CookidooRole", resource_type="AWS::IAM::Role"))
+    with pytest.raises(guard.UnsafeChangeSet, match="exactly one"):
+        guard.validate(change_set, stack, **args)
+
+
+@pytest.mark.parametrize(("event", "confirmation", "expected_success"), [
+    ("push", "AUTO-DEPLOY-ON-MASTER", True),
+    ("push", "DISABLE-COOKIDOO-MEAL-PLANNING", False),
+    ("workflow_dispatch", "AUTO-DEPLOY-ON-MASTER", False),
+    ("workflow_dispatch", "DISABLE-COOKIDOO-MEAL-PLANNING", True),
+])
+def test_automatic_deploy_authorized_only_on_master_push(event, confirmation, expected_success):
+    script = SCRIPT.parent / "validate-recipe-release-request.sh"
+    p = subprocess.run(
+        ["bash", str(script)],
+        env={
+            **os.environ,
+            "GITHUB_REF": "refs/heads/master",
+            "GITHUB_EVENT_NAME": event,
+            "RELEASE_CONFIRMATION": confirmation,
+        },
+        check=False, capture_output=True, text=True,
+    )
+    assert (p.returncode == 0) == expected_success, p.stderr
+    if expected_success and event == "push":
+        assert "action=auto-deploy" in p.stdout
+
+
+def test_auto_deploy_rejected_from_non_master_branch():
+    script = SCRIPT.parent / "validate-recipe-release-request.sh"
+    p = subprocess.run(
+        ["bash", str(script)],
+        env={
+            **os.environ,
+            "GITHUB_REF": "refs/heads/other",
+            "GITHUB_EVENT_NAME": "push",
+            "RELEASE_CONFIRMATION": "AUTO-DEPLOY-ON-MASTER",
+        },
+        check=False, capture_output=True, text=True,
+    )
+    assert p.returncode != 0

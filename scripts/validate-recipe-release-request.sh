@@ -6,6 +6,15 @@ if [[ "${GITHUB_REF:-}" != "refs/heads/master" ]]; then
   echo "::error::Recipe release must run from master (got ${GITHUB_REF:-unset})." >&2
   exit 1
 fi
+# A push to the protected master branch is itself deployment approval.
+# Do not permit the auto-deploy action through workflow_dispatch or pull requests.
+if [[ "${GITHUB_EVENT_NAME:-}" == "push" ]]; then
+  [[ "${RELEASE_CONFIRMATION:-}" == "AUTO-DEPLOY-ON-MASTER" ]] || {
+    echo "::error::Master push must use the automatic deploy confirmation." >&2
+    exit 1
+  }
+  action=auto-deploy
+else
 case "${RELEASE_CONFIRMATION:-}" in
   DEPLOY-COOKIDOO-WRITES-DISABLED) action=deploy-disabled ;;
   ENABLE-COOKIDOO-RECIPE-CREATION) action=enable-writes ;;
@@ -20,6 +29,7 @@ case "${RELEASE_CONFIRMATION:-}" in
     exit 1
     ;;
 esac
+fi
 # Defence in depth: the privileged release job receives the validated output
 # and the original confirmation. Reject any disagreement.
 if [[ -n "${RELEASE_ACTION:-}" && "$RELEASE_ACTION" != "$action" ]]; then

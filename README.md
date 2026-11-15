@@ -2,7 +2,33 @@
 
 Standalone public infrastructure/application repository for an **unofficial** Cookidoo integration. Python runtime uses upstream [alexandrepa/mcp-cookidoo](https://github.com/alexandrepa/mcp-cookidoo) pinned at commit `6f7c33b1d23f8257814fd790341bc84cd88785e0` (v1.1.0). Do not commit passwords, cookies, tokens or personal recipes.
 
-**Status:** The Lambda-first foundation and manual OIDC ZIP deployment are merged. The origin requires both a dedicated Worker bearer and a cryptographically verified Cloudflare Access JWT. Public AWS and Cloudflare activation remain separate, manually gated operations; this repository change does not run them.
+**Status:** The Lambda-first foundation, OIDC deployment, and automated guarded release on master are merged. The origin requires both a dedicated Worker bearer and a cryptographically verified Cloudflare Access JWT. Public AWS and Cloudflare activation remain separate, manually gated operations; this repository change does not run them.
+
+## Production deployment policy (automatic after merge)
+
+Every successful push/merge to **master** triggers
+[`release-recipe-tools.yml`](.github/workflows/release-recipe-tools.yml).
+The workflow runs offline tests, builds one immutable Python 3.12 Lambda ZIP,
+then uses short-lived production-environment OIDC credentials to deploy via
+a single inspected CloudFormation change set. **One release enables recipe
+creation, in-place recipe updates, and My Week scheduling; it does not create
+or edit any recipes or calendar entries itself.** No second operator
+"enable" command is required. These recipe mutations still require explicit
+user approval at the MCP tool level where defined.
+
+The production deployment validates the already-active Function URL, preserves
+its address/authentication, and permits only an in-place Lambda update.
+CloudFormation reports some valid `Code` and `Environment` changes as
+`Dynamic / DirectModification`; the validator permits these **only** for
+these two non-replacing properties and refuses IAM, URL, role, unexpected
+resources, and unrelated parameter transitions. This fixes the failed
+15 November 2026 release (workflow run #7). Existing OIDC/production
+environment protection remains in force.
+
+Manual `workflow_dispatch` remains available for emergency feature shutdown
+and specialised recovery. Any subsequent approved code push re-enables the
+supported recipe tools. CI or CloudFormation failures **stop deployment**;
+they never fall back to an unvalidated direct Lambda update.
 
 ## Design and zero-cost target
 
@@ -51,18 +77,13 @@ repository provides an independently controlled adapter:
   before attempting another write. Neither tool creates a Google Calendar
   event or modifies the recipe.
 
-**Release safety:** `EnableMealPlanningWrites=false` is the CloudFormation
-default. This flag is independent of both recipe creation and recipe updates.
-Merging the code neither deploys it nor schedules a meal. After testing and
-review, use the existing **Cookidoo recipe tools - manual controlled release**
-workflow on `master`: deploy the reviewed code first using
-`DEPLOY-COOKIDOO-RECIPE-UPDATE-CODE`, then explicitly choose
-`ENABLE-COOKIDOO-MEAL-PLANNING`. The second step verifies the deployed ZIP
-matches that same reviewed commit. To remove the write capability independently,
-use `DISABLE-COOKIDOO-MEAL-PLANNING`. All changes remain subject to the
-existing CloudFormation change-set safety gate, including the known IAM drift
-restriction in issue #16. The reader is available once the code is deployed;
-the scheduler is advertised only while the separate flag is enabled.
+**Release safety:** The CloudFormation default is
+`EnableMealPlanningWrites=false` for an unactivated stack, but the
+automatic `master` release sets it to `true` **together with** the reviewed
+code (and the other recipe tool switches). No separate enablement is
+needed. A single `DISABLE-COOKIDOO-MEAL-PLANNING` manual release can turn
+it off in an emergency; a later code push turns it back on.
+The release itself does not schedule any meals or add any test recipes.
 
 ## In-place editing existing custom recipes
 
@@ -76,39 +97,31 @@ The upstream Cookidoo service already provides `update_custom_recipe` and uses C
 
 The update tool is intentionally separate from creation/image-editing enablement. Production updates are disabled by default and merging the feature changes neither the Lambda nor a Cookidoo recipe. The live Cookidoo API has no compare-and-swap update; the pre-PATCH re-read substantially reduces, but does not eliminate, last-moment concurrency conflicts.
 
-**Release:** After CI and review, use the existing manual `Cookidoo recipe tools - manual controlled release` workflow. `DEPLOY-COOKIDOO-RECIPE-UPDATE-CODE` uploads a reviewed ZIP while preserving the current recipe-creation flag and leaves in-place updates **disabled**. Only a separately confirmed `ENABLE-COOKIDOO-RECIPE-UPDATES` enables updates for the same reviewed code SHA. `DISABLE-COOKIDOO-RECIPE-UPDATES` switches them off again. Existing creation controls remain unchanged. For **all six release actions**, the privileged script now creates a CloudFormation change set, checks that its parameters match the requested release, and inspects every proposed resource and property change *before* executing the same change-set ARN. Only one in-place `CookidooFunction` modification (Code/Environment for code releases, Environment for feature toggles) is allowed; replacements, IAM drift, Function URL changes, dynamic/ambiguous updates, additional resources, and unrelated parameter changes block execution. The gate intentionally fails closed until the IAM-only reconciliation tracked in issue #16 is resolved. No broadening of the allowlist is permitted simply to force a release.
+**Release:** Every merge to `master` automatically builds, validates,
+deploys, and enables reviewed recipe creation, update and planning tools in
+one release. Previous two-step manual enablement is no longer required.
+Explicit preview-and-approval gates for mutation calls still apply. The
+release's CloudFormation guard fails closed if unexpected resources or unsafe
+property changes are detected.
 
-## Deploying the merged recipe-creation feature with an active Function URL
 
-The original `deploy.yml` is strictly private-only and **deliberately refuses
-to run when the Lambda already has a Function URL**. Never use it for upgrading
-this already-active origin.
+## Deploying to the existing active Function URL
 
-Use [Cookidoo recipe tools - manual controlled release](.github/workflows/release-recipe-tools.yml)
-on `master` instead. The release uses the protected production GitHub
-environment, short-lived AWS OIDC credentials, existing S3 ZIP release bucket
-and CloudFormation stack. It preserves the currently configured Lambda
-Function URL on every run and verifies the unchanged endpoint afterwards.
+The original `deploy.yml` still handles **private-only** bootstrap and
+deliberately refuses to modify the active Function URL. Normal ongoing
+deployments use [`release-recipe-tools.yml`](.github/workflows/release-recipe-tools.yml)
+on every merge to `master`. Its build/tests and CloudFormation change-set
+guard complete before the update is applied, with no extra manual "enable"
+stage. The deployed ZIP must match the merged revision.
 
-The workflow has **one text input only**: `confirmation`. There is no operation dropdown. The chosen action is derived from the exact confirmation string, so mismatched fields are impossible. Invalid input (including a trailing comma) fails validation before AWS credentials are requested.
+For exceptional recovery, the same workflow retains manually dispatched
+`DEPLOY-COOKIDOO-RECIPE-UPDATE-CODE`,
+`DISABLE-COOKIDOO-RECIPE-CREATION`,
+`DISABLE-COOKIDOO-RECIPE-UPDATES` and
+`DISABLE-COOKIDOO-MEAL-PLANNING` actions. These are **not required** for
+normal operation. A later master release deliberately restores the enabled
+feature flags.
 
-1. **Deploy reviewed code without enabling recipe creation.** Enter `DEPLOY-COOKIDOO-WRITES-DISABLED` in the single confirmation field.
-   This runs all offline tests and the ZIP build, then updates Lambda with
-   `EnableRecipeCreation=false`. The preview tool becomes available but
-   `upload_custom_recipe` remains absent.
-2. **Separate approval to allow actual uploads.** After a live read-only
-   smoke test and review of one disposable custom recipe, enter `ENABLE-COOKIDOO-RECIPE-CREATION` in that field.
-   The action only succeeds when the deployed ZIP matches the exact
-   reviewed `master` SHA, and it never uploads a recipe itself.
-3. **Emergency disable.** Enter `DISABLE-COOKIDOO-RECIPE-CREATION` to remove the tool again
-   without changing the code or Function URL.
-
-The exact-content SHA-256 confirmation produced by
-`preview_custom_recipe_upload` prevents accidental edits between preview
-and upload; it does **not** prove consent. The client must obtain explicit
-user approval for the entire recipe before calling `upload_custom_recipe`.
-Each title is reserved in the existing release bucket, and ambiguous upload
-failures must be investigated rather than automatically retried.
 
 ## ZIP build / offline tests
 

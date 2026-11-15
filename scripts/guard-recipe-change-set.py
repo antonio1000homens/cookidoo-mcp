@@ -29,7 +29,7 @@ FLAG_ACTIONS = {
     "enable-planning": ("EnableMealPlanningWrites", "true"),
     "disable-planning": ("EnableMealPlanningWrites", "false"),
 }
-CODE_ACTIONS = {"deploy-disabled", "deploy-update-code"}
+CODE_ACTIONS = {"deploy-disabled", "deploy-update-code", "auto-deploy"}
 
 
 class UnsafeChangeSet(ValueError):
@@ -97,16 +97,31 @@ def validate(
 
     changes = {key for key in expected if old[key] != expected[key]}
     if action in CODE_ACTIONS:
-        if changes != {"CodeKey"}:
+        # A push to master deploys exactly this code revision and enables the
+        # guarded recipe tools in the SAME change set (no second operation).
+        if action == "auto-deploy":
+            if (creation, updates, planning) != ("true", "true", "true"):
+                raise UnsafeChangeSet("Automatic deployment must enable recipe tools")
+            newly_enabled = {
+                flag for flag in (
+                    "EnableRecipeCreation", "EnableRecipeUpdates",
+                    "EnableMealPlanningWrites",
+                ) if old[flag] != "true"
+            }
+            if changes != {"CodeKey"} | newly_enabled:
+                raise UnsafeChangeSet("Automatic release changes unrelated parameters")
+        elif changes != {"CodeKey"}:
             raise UnsafeChangeSet("Code release also changes unrelated parameters")
         if action == "deploy-disabled" and (
-            creation != "false" or updates != "false"
+            creation != "false" or updates != "false" or planning != "false"
         ):
             raise UnsafeChangeSet("Disabled release cannot enable recipe writes")
         if action == "deploy-update-code" and updates != "false":
             raise UnsafeChangeSet("Updated code must be deployed with edits disabled")
         allowed_props = {"Code", "Environment"}
         required_props = {"Code"}
+        if changes - {"CodeKey"}:
+            required_props.add("Environment")
     else:
         flag, desired = FLAG_ACTIONS[action]
         if changes != {flag} or expected[flag] != desired:
@@ -149,11 +164,21 @@ def validate(
             target.get("Attribute") != "Properties"
             or name not in allowed_props
             or target.get("RequiresRecreation") != "Never"
-            or detail.get("Evaluation") != "Static"
         ):
             raise UnsafeChangeSet(
                 "Dynamic, replacement, or unexpected Lambda property modification"
             )
+        evaluation = detail.get("Evaluation")
+        if evaluation == "Dynamic":
+            # CloudFormation marks Code and Environment as DirectModification
+            # on first rollout of new template variables. It still guarantees
+            # RequiresRecreation=Never. Never allow dynamic IAM/URL/Role changes.
+            if action not in CODE_ACTIONS or detail.get("ChangeSource") != "DirectModification":
+                raise UnsafeChangeSet(
+                    "Dynamic change is not an approved non-replacing code/environment modification"
+                )
+        elif evaluation != "Static":
+            raise UnsafeChangeSet("Unknown CloudFormation change evaluation")
         found.add(name)
     if not required_props.issubset(found):
         raise UnsafeChangeSet("Expected Lambda Code/Environment property change missing")
