@@ -97,11 +97,13 @@ def test_creation_is_disabled_by_default_and_s3_scope_is_explicit():
     assert "EnableRecipeCreation=true" not in deploy
 
 
-def test_active_function_url_release_is_separately_confirmed():
+def test_active_function_url_release_auto_deploys_after_merge():
     workflow = load(".github/workflows/release-recipe-tools.yml")
     release = load("scripts/release-recipe-tools.sh")
     assert "workflow_dispatch:" in workflow
-    assert "\n  push:" not in workflow
+    assert "push:" in workflow
+    assert "branches: [master]" in workflow
+    assert "auto-deploy" in workflow
     assert "\n  pull_request:" not in workflow
     assert "environment: production" in workflow
     assert "id-token: write" in workflow
@@ -120,6 +122,11 @@ def test_active_function_url_release_is_separately_confirmed():
     assert "python3 scripts/guard-recipe-change-set.py" in release
     assert "aws cloudformation execute-change-set" in release
     assert "aws cloudformation deploy --" not in release
+    assert "auto-deploy" in release
+    assert 'enabled=true' in release
+    assert 'updates=true' in release
+    assert 'planning=true' in release
+    assert "GITHUB_EVENT_NAME" in release
     assert "CodeKey" in release
     assert "code_key" in release
     assert "deploy-disabled first" in release
@@ -129,7 +136,7 @@ def test_active_function_url_release_is_separately_confirmed():
     assert "old_url" in release and "new_url" in release
 
 
-def test_release_workflow_cannot_deploy_writes_by_default():
+def test_manual_write_controls_are_retained_but_master_auto_deploys():
     release = load("scripts/release-recipe-tools.sh")
     workflow = load(".github/workflows/release-recipe-tools.yml")
     assert 'write_state=true' not in release
@@ -137,6 +144,8 @@ def test_release_workflow_cannot_deploy_writes_by_default():
     assert 'enabled=false' in release
     assert "steps.confirm.outputs.action == 'deploy-disabled'" in workflow
     assert "RELEASE_ACTION: ${{ needs.validate.outputs.action }}" in workflow
+    assert "AUTO-DEPLOY-ON-MASTER" in workflow
+    assert "auto-deploy" in release
 
 
 def test_origin_bearer_iam_grants_singular_getparameter_on_only_origin_secret():
