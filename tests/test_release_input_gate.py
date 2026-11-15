@@ -12,7 +12,7 @@ WORKFLOW = ROOT / ".github/workflows/release-recipe-tools.yml"
 
 
 def invoke(confirmation, action=None, branch="refs/heads/master"):
-    env = {**os.environ, "GITHUB_REF": branch, "RELEASE_CONFIRMATION": confirmation}
+    env = {**os.environ, "GITHUB_REF": branch, "GITHUB_EVENT_NAME": "workflow_dispatch", "RELEASE_CONFIRMATION": confirmation}
     env.pop("RELEASE_ACTION", None)
     if action is not None:
         env["RELEASE_ACTION"] = action
