@@ -88,6 +88,8 @@ def test_creation_is_disabled_by_default_and_s3_scope_is_explicit():
     assert "COOKIDOO_RECIPE_CREATION_ENABLED: !Ref EnableRecipeCreation" in template
     assert "EnableRecipeUpdates:" in template
     assert "COOKIDOO_RECIPE_UPDATES_ENABLED: !Ref EnableRecipeUpdates" in template
+    assert "EnableMealPlanningWrites:" in template
+    assert "COOKIDOO_MEAL_PLANNING_WRITES_ENABLED: !Ref EnableMealPlanningWrites" in template
     assert "/cookidoo-mcp/write-guards/*" in template
     assert "s3:PutObject" in template
     deploy = load("scripts/deploy-aws.sh")
@@ -107,6 +109,8 @@ def test_active_function_url_release_is_separately_confirmed():
     assert "DEPLOY-COOKIDOO-WRITES-DISABLED" in workflow
     assert "ENABLE-COOKIDOO-RECIPE-CREATION" in workflow
     assert "DISABLE-COOKIDOO-RECIPE-CREATION" in workflow
+    assert "ENABLE-COOKIDOO-MEAL-PLANNING" in workflow
+    assert "DISABLE-COOKIDOO-MEAL-PLANNING" in workflow
     assert "cookidoo-mcp-release" in workflow
     assert '[[ "$(parameter EnableFunctionUrl)" == "true" ]]' in release
     assert 'ParameterKey:"EnableRecipeCreation"' in release
