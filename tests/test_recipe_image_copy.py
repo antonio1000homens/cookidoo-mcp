@@ -152,4 +152,5 @@ async def test_readonly_and_write_tool_visibility(monkeypatch):
         names = {t.name for t in await client.list_tools()}
     assert "preview_copy_custom_recipe_image" in names
     assert "copy_custom_recipe_image" in names
-    assert len(names) == 13
+    assert len(names) == 14
+    assert "get_custom_recipe_image_status" in names
