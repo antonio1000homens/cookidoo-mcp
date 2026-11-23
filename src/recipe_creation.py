@@ -201,13 +201,39 @@ async def create(recipe_json: str, confirmation: str, *,
             "Cookidoo upload could not be confirmed. Do not retry automatically. "
             "Check list_custom_recipes and the write-guard reservation first."
         ) from None
+    # Successful create responses do not guarantee immediate list visibility.
+    # A missing entry may reflect eventual consistency; never retry creation.
+    try:
+        refreshed = await service.list_custom_recipes()
+        list_status = ("present" if any(str(item.id) == str(created.id)
+                                         for item in refreshed) else "absent")
+    except Exception:
+        list_status = "unavailable"
+
     return json.dumps(
         {
             "created": True,
             "recipe_id": str(created.id),
             "name": created.name,
             "url": created.url,
-            "message": "Recipe created in Cookidoo. Retrieve it to verify guided settings.",
+            "recipe_list_status": list_status,
+            "image_status": "not_checked",
+            "image_present_and_verified": None,
+            "image_upload_status": "not_started",
+            "image_upload_workflow": (
+                "No image was uploaded. First use get_custom_recipe_image_status "
+                "to inspect the saved image and confirm recipe_list_status=present. "
+                "If a new photo is wanted, call preview_custom_recipe_image with "
+                "the recipe ID and public HTTPS image URL; show the photo and "
+                "obtain separate explicit user approval; then call "
+                "set_custom_recipe_image with the exact confirmation and, "
+                "finally, get_custom_recipe_image_status again. Do not claim "
+                "image success until image_present_and_verified=true."
+            ),
+            "message": (
+                "Cookidoo returned a new recipe ID; list visibility and the photo "
+                "are separate checks. Do not repeat creation if listing is delayed."
+            ),
         },
         ensure_ascii=False,
     )
