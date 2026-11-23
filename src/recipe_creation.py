@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 from typing import Any
 
 from botocore.exceptions import ClientError
@@ -25,6 +26,50 @@ MAX_STEPS = 80
 MAX_HINTS = 30
 CONFIRM_PREFIX = "CREATE-COOKIDOO-SHA256:"
 GUARD_PREFIX = "cookidoo-mcp/write-guards/"
+_ADDITION_VERBS = re.compile(r"\b(?:add|put|place|weigh|pour|tip|combine)\b", re.IGNORECASE)
+
+
+def review_ingredient_links(recipe: CustomRecipe) -> dict[str, Any]:
+    """Verify explicit ingredient links; warn about likely omissions.
+
+    Plain prose steps are not required to carry links. Missing links are
+    warnings so older, otherwise-valid recipes remain backward compatible.
+    """
+    allowed = set(recipe.ingredients)
+    linked_count = 0
+    warnings: list[str] = []
+    for number, step in enumerate(recipe.steps, start=1):
+        if not isinstance(step, Step):
+            continue
+        links = step.model_dump(mode="json", exclude_none=True).get("ingredients") or []
+        seen: set[str] = set()
+        for link in links:
+            reference, label = link["ingredient"], link["text"]
+            if reference not in allowed:
+                raise ToolError(
+                    f"Step {number}: ingredient link must reference an exact "
+                    "entry in the recipe ingredients list"
+                )
+            if not label or label not in step.text:
+                raise ToolError(
+                    f"Step {number}: ingredient link text must occur verbatim in step text"
+                )
+            if reference in seen:
+                raise ToolError(
+                    f"Step {number}: link each ingredient only once per guided step"
+                )
+            seen.add(reference)
+            linked_count += 1
+        if step.settings and not links and _ADDITION_VERBS.search(step.text):
+            warnings.append(
+                f"Step {number} adds ingredients but has no individual ingredient "
+                "links; check steps[].ingredients before seeking approval"
+            )
+    return {
+        "linked_ingredient_count": linked_count,
+        "ingredient_link_warnings": warnings,
+    }
+
 
 
 def validate_recipe(recipe_json: str) -> tuple[CustomRecipe, str, dict[str, Any]]:
@@ -51,6 +96,7 @@ def validate_recipe(recipe_json: str) -> tuple[CustomRecipe, str, dict[str, Any]
         or any(not hint.strip() or len(hint) > 500 for hint in recipe.hints)
     ):
         raise ToolError("Recipe hints exceed the supported limits")
+    review_ingredient_links(recipe)
 
     normalized = recipe.model_dump(mode="json", exclude_none=True)
     canonical = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -68,6 +114,7 @@ def preview(recipe_json: str) -> str:
             "prep_time": recipe.prep_time,
             "total_time": recipe.total_time,
             "guided_step_count": sum(isinstance(s, Step) for s in recipe.steps),
+            **review_ingredient_links(recipe),
             "ingredients_count": len(recipe.ingredients),
             "steps_count": len(recipe.steps),
             "recipe": normalized,
