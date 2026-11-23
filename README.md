@@ -18,11 +18,15 @@ user approval at the MCP tool level where defined.
 
 The production deployment validates the already-active Function URL, preserves
 its address/authentication, and permits only an in-place Lambda update.
-CloudFormation reports some valid `Code` and `Environment` changes as
-`Dynamic / DirectModification`; the validator permits these **only** for
-these two non-replacing properties and refuses IAM, URL, role, unexpected
-resources, and unrelated parameter transitions. This fixes the failed
-15 November 2026 release (workflow run #7). Existing OIDC/production
+CloudFormation reports valid `Code` changes as `Dynamic / DirectModification`.
+The validator permits them only during non-replacing code releases. A dynamic
+`Environment` change is accepted only after the complete live Lambda
+environment matches the current stack parameters and the live template
+matches the proposed template, or differs only by the exact reviewed
+recipe-update or meal-planning flag additions. IAM, URL, role, unexpected
+resources, and unrelated parameter transitions remain blocked. This addresses
+the failed 15 November 2026 release (workflow run #7) without broadening the
+dynamic environment allowance. Existing OIDC/production
 environment protection remains in force.
 
 Manual `workflow_dispatch` remains available for emergency feature shutdown

@@ -31,6 +31,67 @@ FLAG_ACTIONS = {
 }
 CODE_ACTIONS = {"deploy-disabled", "deploy-update-code", "auto-deploy"}
 
+_NEW_FLAG_TEMPLATES = {
+    "EnableRecipeUpdates": (
+        "  EnableRecipeUpdates:\n"
+        "    Type: String\n"
+        "    AllowedValues: ['true', 'false']\n"
+        "    Default: 'false'\n"
+        "    Description: Independently enable explicitly approved updates to owned custom recipes.\n"
+    ),
+    "EnableMealPlanningWrites": (
+        "  EnableMealPlanningWrites:\n"
+        "    Type: String\n"
+        "    AllowedValues: ['true', 'false']\n"
+        "    Default: 'false'\n"
+        "    Description: Independently enable adding recipes to the Cookidoo My Week meal planner.\n"
+    ),
+}
+_NEW_FLAG_ENVIRONMENT = {
+    "EnableRecipeUpdates": "          COOKIDOO_RECIPE_UPDATES_ENABLED: !Ref EnableRecipeUpdates\n",
+    "EnableMealPlanningWrites": "          COOKIDOO_MEAL_PLANNING_WRITES_ENABLED: !Ref EnableMealPlanningWrites\n",
+}
+
+
+def _template_matches_existing(
+    existing: str | None, proposed: str | None, old_parameters: set[str]
+) -> bool:
+    """Allow identical templates or only exact additions for absent flags."""
+    if not isinstance(existing, str) or not isinstance(proposed, str):
+        return False
+    original = existing.rstrip("\n") + "\n"
+    approved = proposed.rstrip("\n") + "\n"
+    if original == approved:
+        return True
+    for flag, parameter_block in _NEW_FLAG_TEMPLATES.items():
+        if flag in old_parameters:
+            continue
+        environment_line = _NEW_FLAG_ENVIRONMENT[flag]
+        if approved.count(parameter_block) != 1 or approved.count(environment_line) != 1:
+            return False
+        approved = approved.replace(parameter_block, "", 1).replace(environment_line, "", 1)
+    return approved == original
+
+
+def _expected_environment(params: dict[str, str], old_parameters: set[str]) -> dict[str, str]:
+    expected = {
+        "COOKIDOO_COUNTRY": "gb",
+        "COOKIDOO_LANGUAGE": "en-GB",
+        "COOKIDOO_DEVICE": "TM7",
+        "COOKIDOO_EMAIL_PARAM": params["EmailParameterName"],
+        "COOKIDOO_RECIPE_CREATION_ENABLED": params["EnableRecipeCreation"],
+        "COOKIDOO_WRITE_GUARD_BUCKET": params["CodeBucket"],
+        "COOKIDOO_PASSWORD_PARAM": params["PasswordParameterName"],
+        "ORIGIN_BEARER_PARAM": params["OriginBearerParameterName"],
+        "CF_ACCESS_TEAM_DOMAIN": params["CloudflareTeamDomain"],
+        "CF_ACCESS_AUD": params["CloudflareAudience"],
+    }
+    if "EnableRecipeUpdates" in old_parameters:
+        expected["COOKIDOO_RECIPE_UPDATES_ENABLED"] = params["EnableRecipeUpdates"]
+    if "EnableMealPlanningWrites" in old_parameters:
+        expected["COOKIDOO_MEAL_PLANNING_WRITES_ENABLED"] = params["EnableMealPlanningWrites"]
+    return expected
+
 
 class UnsafeChangeSet(ValueError):
     """The requested deployment contains an unreviewed or ambiguous change."""
@@ -53,6 +114,9 @@ def _parameters(entries: object) -> dict[str, str]:
 def validate(
     change_set: dict, stack: dict, *,
     action: str, code_key: str, creation: str, updates: str, planning: str = "false",
+    existing_template: str | None = None,
+    proposed_template: str | None = None,
+    current_env: dict[str, str] | None = None,
 ) -> list[str]:
     """Validate a complete DescribeChangeSet response against current stack."""
     if action not in CODE_ACTIONS | FLAG_ACTIONS.keys():
@@ -76,6 +140,21 @@ def validate(
         raise UnsafeChangeSet("Current stack name mismatch")
 
     old = _parameters(existing_stack.get("Parameters"))
+    old_parameters = set(old)
+    snapshots_supplied = any(
+        value is not None for value in (existing_template, proposed_template, current_env)
+    )
+    template_verified = False
+    if snapshots_supplied:
+        if not all(value is not None for value in (
+            existing_template, proposed_template, current_env
+        )):
+            raise UnsafeChangeSet("Incomplete live template or environment snapshot")
+        template_verified = _template_matches_existing(
+            existing_template, proposed_template, old_parameters
+        )
+        if not template_verified:
+            raise UnsafeChangeSet("Unreviewed CloudFormation template changes")
     # On the first deployment of this template, EnableRecipeUpdates is absent
     # from the old stack. Treat that absent flag as the default disabled state.
     if "EnableRecipeUpdates" not in old:
@@ -86,6 +165,8 @@ def validate(
         raise UnsafeChangeSet("Unexpected parameters in current stack")
     if old["EnableFunctionUrl"] != "true":
         raise UnsafeChangeSet("Existing Function URL is not enabled")
+    if snapshots_supplied and current_env != _expected_environment(old, old_parameters):
+        raise UnsafeChangeSet("Current Lambda environment does not match stack parameters")
 
     expected = dict(old)
     expected["CodeKey"] = code_key
@@ -170,12 +251,15 @@ def validate(
             )
         evaluation = detail.get("Evaluation")
         if evaluation == "Dynamic":
-            # CloudFormation marks Code and Environment as DirectModification
-            # on first rollout of new template variables. It still guarantees
-            # RequiresRecreation=Never. Never allow dynamic IAM/URL/Role changes.
+            # Dynamic Code is permitted for code actions. Environment requires
+            # exact live-template and complete runtime-environment verification.
             if action not in CODE_ACTIONS or detail.get("ChangeSource") != "DirectModification":
                 raise UnsafeChangeSet(
                     "Dynamic change is not an approved non-replacing code/environment modification"
+                )
+            if name == "Environment" and not (template_verified and snapshots_supplied):
+                raise UnsafeChangeSet(
+                    "Dynamic Environment change lacks verified template and runtime state"
                 )
         elif evaluation != "Static":
             raise UnsafeChangeSet("Unknown CloudFormation change evaluation")
@@ -194,6 +278,9 @@ def main() -> int:
     parser.add_argument("--creation", required=True)
     parser.add_argument("--updates", required=True)
     parser.add_argument("--planning", required=True)
+    parser.add_argument("--existing-template", type=Path)
+    parser.add_argument("--proposed-template", type=Path)
+    parser.add_argument("--current-env", type=Path)
     args = parser.parse_args()
     try:
         approved = validate(
@@ -204,6 +291,9 @@ def main() -> int:
             creation=args.creation,
             updates=args.updates,
             planning=args.planning,
+            existing_template=(args.existing_template.read_text(encoding="utf-8") if args.existing_template else None),
+            proposed_template=(args.proposed_template.read_text(encoding="utf-8") if args.proposed_template else None),
+            current_env=(json.loads(args.current_env.read_text(encoding="utf-8")) if args.current_env else None),
         )
     except (UnsafeChangeSet, ValueError, OSError, TypeError, KeyError) as exc:
         print(
