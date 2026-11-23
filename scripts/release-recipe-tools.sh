@@ -120,6 +120,13 @@ cleanup() {
 trap cleanup EXIT
 
 printf '%s' "$stack" > "$change_set_dir/current-stack.json"
+aws cloudformation get-template --region "$AWS_REGION" \
+  --stack-name cookidoo-mcp --template-stage Original \
+  --query TemplateBody --output text > "$change_set_dir/current-template.yaml"
+aws lambda get-function-configuration --region "$AWS_REGION" \
+  --function-name cookidoo-mcp \
+  --query Environment.Variables --output json > "$change_set_dir/current-env.json"
+
 # Retain the current approved configuration. Only the deliberately requested
 # CodeKey and feature flags may differ from the existing stack parameters.
 jq --arg code "$code_key" --arg creation "$enabled" --arg updates "$updates" --arg planning "$planning" '
@@ -163,7 +170,10 @@ python3 scripts/guard-recipe-change-set.py \
   --change-set "$change_set_dir/change-set.json" \
   --stack "$change_set_dir/current-stack.json" \
   --action "$RELEASE_ACTION" --code-key "$code_key" \
-  --creation "$enabled" --updates "$updates" --planning "$planning"
+  --creation "$enabled" --updates "$updates" --planning "$planning" \
+  --existing-template "$change_set_dir/current-template.yaml" \
+  --proposed-template infrastructure/cookidoo.yaml \
+  --current-env "$change_set_dir/current-env.json"
 
 # Only execute the ARN verified above; never regenerate a change set between
 # inspection and execution. One repository-wide release concurrency group
@@ -189,6 +199,18 @@ planning_flag="$(aws lambda get-function-configuration --region "$AWS_REGION" \
   --function-name cookidoo-mcp \
   --query 'Environment.Variables.COOKIDOO_MEAL_PLANNING_WRITES_ENABLED' --output text)"
 [[ "$planning_flag" == "$planning" ]] || { echo 'Meal plan scheduling state mismatch' >&2; exit 1; }
+aws lambda get-function-configuration --region "$AWS_REGION" \
+  --function-name cookidoo-mcp \
+  --query Environment.Variables --output json > "$change_set_dir/deployed-env.json"
+jq -e --slurpfile before "$change_set_dir/current-env.json" \
+  --arg creation "$enabled" --arg updates "$updates" --arg planning "$planning" \
+  '. == ($before[0] + {
+    COOKIDOO_RECIPE_CREATION_ENABLED: $creation,
+    COOKIDOO_RECIPE_UPDATES_ENABLED: $updates,
+    COOKIDOO_MEAL_PLANNING_WRITES_ENABLED: $planning
+  })' "$change_set_dir/deployed-env.json" >/dev/null || {
+    echo '::error::Unexpected Lambda environment change after deployment' >&2; exit 1;
+  }
 {
   echo '### Cookidoo MCP production release'
   echo "- Operation: $RELEASE_ACTION"

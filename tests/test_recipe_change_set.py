@@ -229,6 +229,9 @@ def test_source_script_executes_exact_arn_only_after_validator():
     assert script.index("python3 scripts/guard-recipe-change-set.py") < script.index("aws cloudformation execute-change-set")
     assert '--change-set-name "$change_set_arn"' in script
     assert "--parameters \"file://$change_set_dir/requested-parameters.json\"" in script
+    assert "aws cloudformation get-template" in script
+    assert "--existing-template" in script and "--proposed-template" in script
+    assert "--current-env" in script and "deployed-env.json" in script
 
 
 def test_release_confirmation_error_is_clear():
@@ -255,16 +258,60 @@ def test_auto_deploy_enables_every_tool_and_builds_code_in_single_change_set():
     assert guard.validate(change_set, stack, **args) == ["Code", "Environment"]
 
 
-def test_auto_deploy_accepts_cloudformation_dynamic_direct_modification():
-    # Observed on real Cookidoo stack, 15 November 2026: Code and Environment
-    # have both Static/ParameterReference and Dynamic/DirectModification entries.
+def test_auto_deploy_accepts_dynamic_code_and_verified_environment():
     stack, change_set, args = case("auto-deploy")
     for prop in ("Code", "Environment"):
         change_set["Changes"][0]["ResourceChange"]["Details"].append({
             **detail(prop, evaluation="Dynamic"),
             "ChangeSource": "DirectModification",
         })
-    assert guard.validate(change_set, stack, **args) == ["Code", "Environment"]
+    template = "reviewed-template"
+    env = guard._expected_environment(BASE, set(BASE))
+    assert guard.validate(
+        change_set, stack, **args,
+        existing_template=template, proposed_template=template, current_env=env,
+    ) == ["Code", "Environment"]
+
+
+def test_dynamic_environment_requires_verified_runtime_state():
+    stack, change_set, args = case("auto-deploy")
+    change_set["Changes"][0]["ResourceChange"]["Details"].append({
+        **detail("Environment", evaluation="Dynamic"),
+        "ChangeSource": "DirectModification",
+    })
+    with pytest.raises(guard.UnsafeChangeSet, match="lacks verified"):
+        guard.validate(change_set, stack, **args)
+
+    env = guard._expected_environment(BASE, set(BASE))
+    env["UNREVIEWED_ENVIRONMENT_KEY"] = "unexpected"
+    with pytest.raises(guard.UnsafeChangeSet, match="does not match"):
+        guard.validate(
+            change_set, stack, **args,
+            existing_template="reviewed-template",
+            proposed_template="reviewed-template",
+            current_env=env,
+        )
+
+
+def test_first_rollout_template_delta_requires_exact_missing_update_flag():
+    stack, change_set, args = case("deploy-update-code", missing_update_flag=True)
+    original = "original-template\n"
+    addition = (
+        "  EnableRecipeUpdates:\n"
+        "    Type: String\n"
+        "    AllowedValues: ['true', 'false']\n"
+        "    Default: 'false'\n"
+        "    Description: Independently enable explicitly approved updates to owned custom recipes.\n"
+        "          COOKIDOO_RECIPE_UPDATES_ENABLED: !Ref EnableRecipeUpdates\n"
+    )
+    proposed = original + addition
+    old_parameters = set(BASE) - {"EnableRecipeUpdates"}
+    env = guard._expected_environment(BASE, old_parameters)
+    assert guard._template_matches_existing(original, proposed, old_parameters)
+    assert guard.validate(
+        change_set, stack, **args,
+        existing_template=original, proposed_template=proposed, current_env=env,
+    ) == ["Code", "Environment"]
 
 
 def test_auto_deploy_fails_closed_on_unexpected_dynamic_property():
