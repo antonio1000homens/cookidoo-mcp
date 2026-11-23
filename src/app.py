@@ -53,6 +53,11 @@ def build_mcp() -> FastMCP:
         version=upstream.VERSION,
         instructions=(
             "Search and inspect Cookidoo recipes and prepare validated recipes. "
+            "For guided steps that add ingredients, link each ingredient individually "
+            "using steps[].ingredients: link.text is an exact phrase in step.text and "
+            "link.ingredient is the exact top-level ingredient-list entry. "
+            "Never combine several ingredients into a single link. "
+            "Steps without ingredient additions do not need links. "
             "Creating a custom recipe requires a validated full preview, explicit user approval, "
             "an exact-content confirmation, and server-side write enablement. "
             "Never write from a preview alone; updating existing recipes requires a separate exact-content preview and approval. Never delete recipes."
@@ -115,7 +120,18 @@ def build_mcp() -> FastMCP:
         total_time: int = 60,
         hints: list[str] | str = "",
     ) -> str:
-        """Validate and preview recipe JSON; does not upload it."""
+        """Validate and preview recipe JSON; does not upload it.
+
+        Default to a separate steps[].ingredients link for EACH ingredient
+        being added or weighed in guided steps. For example, if a step says
+        "Add light soy sauce and water {settings}.", use separate links
+        [{"text": "light soy sauce", "ingredient": "40 g light soy sauce"},
+         {"text": "water", "ingredient": "70 g water"}] when those exact
+        ingredient lines are present. link.text must occur verbatim in the
+        step text and link.ingredient must exactly match its ingredient line.
+        Do not group ingredients. Steps with no additions need no links.
+        Links are annotations, not guaranteed Cookidoo UI tickboxes.
+        """
         try:
             return await upstream.generate_recipe_structure(
                 name=name,
@@ -135,8 +151,10 @@ def build_mcp() -> FastMCP:
     async def preview_custom_recipe_upload(recipe_json: str) -> str:
         """Preview a validated recipe and obtain its exact-content confirmation.
 
-        This tool makes no Cookidoo writes. Show the full recipe to the user
-        and ask for explicit approval before any creation tool call.
+        This tool makes no Cookidoo writes. Review linked_ingredient_count
+        and ingredient_link_warnings; fix missing individual links when
+        relevant. Show the complete recipe and get explicit approval
+        before any creation tool call.
         """
         return preview(recipe_json)
 
@@ -146,8 +164,9 @@ def build_mcp() -> FastMCP:
 
         The approval fingerprint covers both the live source recipe (including
         its existing image and raw guided steps) and the full proposed recipe.
-        Show the full proposed content and obtain explicit user approval before
-        calling update_custom_recipe.
+        Review ingredient_link_warnings and provide a separate link for each
+        ingredient added in guided steps. Show the full proposed content and
+        obtain explicit user approval before calling update_custom_recipe.
         """
         return await preview_update(
             recipe_id, recipe_json,
