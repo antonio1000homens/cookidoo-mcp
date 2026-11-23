@@ -49,6 +49,28 @@ The Lambda checks the Worker bearer against AWS SSM Standard SecureString using 
 
 ### Guarded recipe creation (disabled until separately approved)
 
+#### Individual ingredient links in guided steps
+
+Agents creating or updating recipes should annotate **each added or weighed ingredient individually** in structured \`steps[].ingredients\`, with \`text\` matching a literal phrase in the step and \`ingredient\` matching an exact ingredient-list entry. For example:
+
+\`\`\`json
+{
+  "ingredients": ["40 g light soy sauce", "70 g water"],
+  "steps": [{
+    "text": "Add light soy sauce and water. Mix {settings}.",
+    "settings": [{"time": 120, "temperature": "50", "speed": "2"}],
+    "ingredients": [
+      {"text": "light soy sauce", "ingredient": "40 g light soy sauce"},
+      {"text": "water", "ingredient": "70 g water"}
+    ]
+  }]
+}
+\`\`\`
+
+The MCP server instructions and \`generate_recipe_structure\` tool description recommend these separate links by default. Validation rejects unknown ingredient references, link text missing from the step, and repeated links to the same ingredient within one step. Both create/update previews expose \`linked_ingredient_count\` and advisory \`ingredient_link_warnings\` when a guided step uses addition verbs but has no links. Steps with no additions do not need annotations; warnings do not reject legacy unlinked recipes or bypass user approval.
+
+Ingredient-link annotations are not necessarily separate clickable Cookidoo/TM7 tickboxes; confirm that behaviour in the actual UI. Tests are offline and do not create any Cookidoo recipes.
+
 The default remote tool catalog includes the five original read/validation tools plus \`preview_custom_recipe_upload\`. This preview validates upstream \`CustomRecipe\` data (including TM7 settings, reverse speeds and ingredient links), applies strict payload limits, and returns a JSON preview plus a SHA-256 confirmation string. It does not write anything.
 
 \`upload_custom_recipe\` is registered **only if** the separate CloudFormation parameter \`EnableRecipeCreation=true\` is explicitly set. It requires the exact previewed recipe JSON and matching \`CREATE-COOKIDOO-SHA256:<digest>\` confirmation **after a user approves that exact preview**. This is a data-integrity gate, not proof of user consent; clients must obtain explicit user approval before invoking the write tool. Existing-recipe names are checked before submission. A create-only S3 marker in the pre-existing code bucket under \`cookidoo-mcp/write-guards/\` prevents multiple writes using the same normalized title across concurrent or repeated invocations. A timeout or ambiguous remote failure retains its marker to prevent unsafe automatic retries. Inspect the account and marker manually before clearing and retrying. Store no recipe text or credentials in this marker; only SHA-256 hashes.

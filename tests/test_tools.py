@@ -35,6 +35,16 @@ async def test_exposes_only_read_and_preview_tools(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_generator_description_teaches_individual_ingredient_links():
+    async with Client(app.build_mcp()) as client:
+        tools = {tool.name: tool for tool in await client.list_tools()}
+    description = tools["generate_recipe_structure"].description
+    assert "steps[].ingredients" in description
+    assert "EACH ingredient" in description
+    assert "light soy sauce" in description
+
+
+@pytest.mark.asyncio
 async def test_search_delegates_to_pinned_upstream(monkeypatch):
     monkeypatch.setattr(app, "ensure_credentials", lambda: None)
     upstream_search = AsyncMock(return_value="Found mocked test recipe")

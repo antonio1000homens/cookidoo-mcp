@@ -16,7 +16,7 @@ from fastmcp.exceptions import ToolError
 from guided import from_raw
 from schemas import Step
 
-from src.recipe_creation import validate_recipe
+from src.recipe_creation import review_ingredient_links, validate_recipe
 
 CONFIRM_PREFIX = "UPDATE-COOKIDOO-SHA256:"
 RECIPE_ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
@@ -110,6 +110,7 @@ async def preview(recipe_id: str, recipe_json: str, *,
         "new_steps": len(recipe.steps),
         "original_ingredients": len(current.ingredients),
         "new_ingredients": len(recipe.ingredients),
+        **review_ingredient_links(recipe),
         "existing_image_present": bool(current.image),
         "image_action": "Preserve the current recipe photo; no image upload",
         "recipe": proposed,
