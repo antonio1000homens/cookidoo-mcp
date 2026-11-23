@@ -150,5 +150,5 @@ async def test_status_tool_is_always_read_only_even_when_uploads_disabled(monkey
     async with Client(app.build_mcp()) as client:
         tools = {tool.name: tool for tool in await client.list_tools()}
     assert "get_custom_recipe_image_status" in tools
-    assert tools["get_custom_recipe_image_status"].annotations.readOnlyHint is True
+    assert tools["get_custom_recipe_image_status"].annotations.read_only_hint is True
     assert "set_custom_recipe_image" not in tools
