@@ -225,8 +225,60 @@ async def test_success_reserves_title_once_and_reports_created_id(monkeypatch):
     ))
     assert result["created"] is True
     assert result["recipe_id"] == "recipe-test-id"
+    assert result["recipe_list_status"] == "absent"
+    assert result["image_upload_status"] == "not_started"
+    assert result["image_present_and_verified"] is None
+    assert "preview_custom_recipe_image" in result["image_upload_workflow"]
     assert len(reservations) == 1
     assert service.create_custom_recipe.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_created_recipe_visible_on_second_list_check(monkeypatch):
+    monkeypatch.setenv("COOKIDOO_RECIPE_CREATION_ENABLED", "true")
+    monkeypatch.setenv("COOKIDOO_WRITE_GUARD_BUCKET", "aws2022-lambda-code")
+    monkeypatch.setattr(recipe_creation, "_reserve_title", lambda *args: None)
+    created_id = "01M84RRM1HG27PGCDWXK765YSG"
+    service = SimpleNamespace(
+        list_custom_recipes=AsyncMock(side_effect=[
+            [], [SimpleNamespace(id=created_id, name=RECIPE["name"])]
+        ]),
+        create_custom_recipe=AsyncMock(return_value=SimpleNamespace(
+            id=created_id, name=RECIPE["name"],
+            url="https://cookidoo.co.uk/created-recipes/test"
+        )),
+    )
+    result = json.loads(await recipe_creation.create(
+        JSON, json.loads(recipe_creation.preview(JSON))["confirmation"],
+        ensure_credentials=lambda: None, get_service=lambda: service,
+    ))
+    assert result["created"] is True
+    assert result["recipe_list_status"] == "present"
+    assert result["image_status"] == "not_checked"
+    assert service.list_custom_recipes.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_created_recipe_with_failed_list_readback_reports_unknown(monkeypatch):
+    monkeypatch.setenv("COOKIDOO_RECIPE_CREATION_ENABLED", "true")
+    monkeypatch.setenv("COOKIDOO_WRITE_GUARD_BUCKET", "aws2022-lambda-code")
+    monkeypatch.setattr(recipe_creation, "_reserve_title", lambda *args: None)
+    service = SimpleNamespace(
+        list_custom_recipes=AsyncMock(side_effect=[
+            [], TimeoutError("sensitive upstream error")
+        ]),
+        create_custom_recipe=AsyncMock(return_value=SimpleNamespace(
+            id="test-recipe-id", name=RECIPE["name"], url="https://cookidoo.co.uk/test"
+        )),
+    )
+    result = json.loads(await recipe_creation.create(
+        JSON, json.loads(recipe_creation.preview(JSON))["confirmation"],
+        ensure_credentials=lambda: None, get_service=lambda: service,
+    ))
+    assert result["created"] is True
+    assert result["recipe_list_status"] == "unavailable"
+    assert result["image_present_and_verified"] is None
+    service.create_custom_recipe.assert_awaited_once()
 
 
 @pytest.mark.asyncio

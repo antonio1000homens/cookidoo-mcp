@@ -89,6 +89,8 @@ async def test_preview_never_mutates_and_binds_id_image_source_and_new_content()
     assert item["action"] == "PREVIEW_ONLY"
     assert item["recipe_id"] == OLD_ID
     assert item["existing_image_present"] is True
+    assert item["existing_image_reference_present"] is True
+    assert item["image_present_and_verified"] is None
     assert item["recipe"]["ingredients"] == RECIPE["ingredients"]
     assert item["recipe"]["steps"][1]["settings"][0]["mode"] == "browning"
     assert item["confirmation"].startswith(recipe_updates.CONFIRM_PREFIX)
@@ -162,10 +164,32 @@ async def test_exact_approval_updates_same_id_and_verifies_guided_steps_and_phot
     assert result["updated"] is True and result["verified"] is True
     assert result["recipe_id"] == OLD_ID
     assert result["image_preserved"] is True
+    assert result["image_reference_unchanged"] is True
+    assert result["image_reference_present"] is True
+    assert result["image_present_and_verified"] is None
+    assert result["image_retrievability"] == "not_checked"
+    assert "NOT checked" in result["message"]
     assert result["guided_step_count"] == 1
     svc.update_custom_recipe.assert_awaited_once()
     assert svc.update_custom_recipe.await_args.args[0] == OLD_ID
     assert svc.update_custom_recipe.await_args.args[1].ingredients == RECIPE["ingredients"]
+
+
+@pytest.mark.asyncio
+async def test_update_without_picture_does_not_claim_image_present(monkeypatch):
+    monkeypatch.setenv("COOKIDOO_RECIPE_UPDATES_ENABLED", "true")
+    svc = fake_service(old=current(image=""), fresh=after(image=""))
+    preview = json.loads(await recipe_updates.preview(
+        OLD_ID, JSON, ensure_credentials=lambda: None, get_service=lambda: svc
+    ))
+    response = json.loads(await recipe_updates.update(
+        OLD_ID, JSON, preview["confirmation"],
+        ensure_credentials=lambda: None, get_service=lambda: svc,
+    ))
+    assert response["updated"] is True
+    assert response["image_reference_unchanged"] is True
+    assert response["image_reference_present"] is False
+    assert response["image_present_and_verified"] is None
 
 
 @pytest.mark.asyncio

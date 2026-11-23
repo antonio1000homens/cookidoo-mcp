@@ -194,6 +194,9 @@ async def test_success_reserves_once_then_verifies_image_readback(monkeypatch):
         download_image=download, update_image=update
     ))
     assert result["updated"] and result["verified"]
+    assert result["verification_scope"] == "persisted_image_reference_only"
+    assert result["image_present_and_verified"] is None
+    assert "get_custom_recipe_image_status" in result["next_step"]
     assert result["name"] == "Chicken Madras TM7"
     assert len(reservations) == 1
     assert reservations[0][0] == "aws2022-lambda-code"

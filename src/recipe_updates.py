@@ -111,8 +111,11 @@ async def preview(recipe_id: str, recipe_json: str, *,
         "original_ingredients": len(current.ingredients),
         "new_ingredients": len(recipe.ingredients),
         **review_ingredient_links(recipe),
-        "existing_image_present": bool(current.image),
-        "image_action": "Preserve the current recipe photo; no image upload",
+        "existing_image_present": bool(current.image),  # Historical: reference only.
+        "existing_image_reference_present": bool(current.image),
+        "image_retrievability": "not_checked",
+        "image_present_and_verified": None,
+        "image_action": "Preserve the current image reference; no image upload or retrieval check",
         "recipe": proposed,
         "confirmation": _confirmation(recipe_id, original_sha, proposed_sha),
         "next_step": (
@@ -198,9 +201,18 @@ async def update(recipe_id: str, recipe_json: str, confirmation: str, *,
         "verified": True,
         "recipe_id": recipe_id,
         "name": fresh.name,
-        "image_preserved": same_image,
+        "image_preserved": same_image,  # Compatibility: reference equality only.
+        "image_reference_unchanged": same_image,
+        "image_reference_present": bool(fresh.image),
+        "image_retrievability": "not_checked",
+        "image_present_and_verified": None,
+        "recipe_verified": True,
         "guided_step_count": sum(isinstance(s, Step) for s in recipe.steps),
         "steps_count": len(recipe.steps),
         "url": fresh.url,
-        "message": "Existing Cookidoo recipe updated and verified in place.",
+        "message": (
+            "Recipe data and unchanged image reference verified after update; "
+            "photo retrievability was NOT checked. Call "
+            "get_custom_recipe_image_status before reporting a visible image."
+        ),
     }, ensure_ascii=False)

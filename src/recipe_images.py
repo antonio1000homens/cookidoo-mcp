@@ -352,5 +352,16 @@ async def upload(recipe_id: str, image_url: str, confirmation: str,
     return json.dumps({
         "updated": True, "recipe_id": recipe_id, "name": title,
         "url": "https://cookidoo.co.uk/created-recipes/en-GB/" + recipe_id,
-        "verified": True, "image_sha256": image.sha256
+        "verified": True,  # Historical: persisted-reference read-back only.
+        "verification_scope": "persisted_image_reference_only",
+        "image_reference_saved": True,
+        "image_retrievability": "not_checked",
+        "image_present_and_verified": None,
+        "image_sha256": image.sha256,
+        "next_step": (
+            "Call get_custom_recipe_image_status with this recipe_id. "
+            "Only report the photo as present and verified when that tool "
+            "returns image_present_and_verified=true. Do not automatically "
+            "retry a failed or uncertain upload."
+        )
     })
