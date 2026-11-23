@@ -23,6 +23,7 @@ from src.recipe_creation import create, preview
 from src.recipe_updates import preview as preview_update, update as apply_update
 from src.recipe_images import preview as preview_image, upload as upload_image
 from src.recipe_image_copy import preview as preview_image_copy, copy as copy_image
+from src.recipe_image_status import get_status as get_image_status
 from src.meal_planner import get_week as read_meal_plan, schedule as schedule_meal
 
 READ_ONLY = {"readOnlyHint": True, "openWorldHint": True}
@@ -97,6 +98,21 @@ def build_mcp() -> FastMCP:
     async def get_custom_recipe(recipe_id: str) -> str:
         """Read a custom recipe including editable structured guided settings."""
         return await _call(upstream.get_custom_recipe, recipe_id=recipe_id)
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def get_custom_recipe_image_status(recipe_id: str) -> str:
+        """Check a custom recipe's stored image reference and actual retrievability.
+
+        Read-only; distinguishes missing images, inaccessible image URLs,
+        unresolvable media references, and verified downloadable images.
+        Also reports when a newly created recipe is accessible by ID but
+        absent from list_custom_recipes. Never infer image verification from
+        a successful recipe update or a preserved image reference.
+        """
+        return await get_image_status(
+            recipe_id, ensure_credentials=ensure_credentials,
+            get_service=upstream._get_service,
+        )
 
     @mcp.tool(annotations=READ_ONLY)
     async def get_calendar_week(day: str) -> str:
@@ -219,6 +235,9 @@ def build_mcp() -> FastMCP:
             identical recipe_json plus the confirmation from that preview.
             Existing recipe names and attempted uploads are fail-closed against
             duplicates. Never retry an ambiguous error automatically.
+            Recipe creation never uploads a picture. After creation call
+            get_custom_recipe_image_status and confirm the recipe appears
+            in list_custom_recipes before previewing a separate photo upload.
             """
             return await create(
                 recipe_json, confirmation,
@@ -239,7 +258,9 @@ def build_mcp() -> FastMCP:
             confirmation binds the image bytes and prior recipe photo.
             Set replace_existing=true only with explicit user approval.
             No existing recipe text, ingredients, timing or steps change.
-            Never retry an ambiguous upload failure automatically.
+            The upload result verifies only the stored reference: afterwards
+            call get_custom_recipe_image_status to confirm the photo is
+            actually retrievable. Never retry an ambiguous upload failure automatically.
             """
             return await upload_image(
                 recipe_id, image_url, confirmation, replace_existing,
