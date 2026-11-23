@@ -35,6 +35,99 @@ def test_preview_has_exact_content_confirmation_and_guided_steps():
     assert data["recipe"]["name"] == RECIPE["name"]
 
 
+def linked_recipe():
+    """Guided step with one distinct annotation per ingredient."""
+    return {
+        **RECIPE,
+        "ingredients": [
+            "40 g light soy sauce", "5 g dark soy sauce", "70 g water"
+        ],
+        "steps": [{
+            "text": "Add light soy sauce, dark soy sauce and water. Mix {settings}.",
+            "settings": [{"time": 60, "temperature": "50", "speed": "2"}],
+            "ingredients": [
+                {"text": "light soy sauce", "ingredient": "40 g light soy sauce"},
+                {"text": "dark soy sauce", "ingredient": "5 g dark soy sauce"},
+                {"text": "water", "ingredient": "70 g water"},
+            ],
+        }],
+    }
+
+
+def test_preview_preserves_each_individual_ingredient_link():
+    data = json.loads(recipe_creation.preview(json.dumps(linked_recipe())))
+    assert data["linked_ingredient_count"] == 3
+    assert data["ingredient_link_warnings"] == []
+    assert data["recipe"]["steps"][0]["ingredients"] == linked_recipe()["steps"][0]["ingredients"]
+
+
+def test_link_changes_invalidate_exact_content_confirmation():
+    original = linked_recipe()
+    changed = linked_recipe()
+    changed["steps"][0]["ingredients"].pop()
+    a = json.loads(recipe_creation.preview(json.dumps(original)))
+    b = json.loads(recipe_creation.preview(json.dumps(changed)))
+    assert a["confirmation"] != b["confirmation"]
+
+
+def test_preview_warns_when_guided_additions_have_no_links():
+    recipe = linked_recipe()
+    recipe["steps"][0].pop("ingredients")
+    data = json.loads(recipe_creation.preview(json.dumps(recipe)))
+    assert data["linked_ingredient_count"] == 0
+    assert len(data["ingredient_link_warnings"]) == 1
+    assert "Step 1" in data["ingredient_link_warnings"][0]
+
+    recipe["steps"][0]["text"] = "Cook {settings}."
+    data = json.loads(recipe_creation.preview(json.dumps(recipe)))
+    assert data["ingredient_link_warnings"] == []
+
+
+@pytest.mark.parametrize("broken_link", [
+    {"text": "light soy sauce", "ingredient": "40 g wrong soy sauce"},
+    {"text": "not in step", "ingredient": "40 g light soy sauce"},
+])
+def test_invalid_ingredient_links_are_rejected(broken_link):
+    recipe = linked_recipe()
+    recipe["steps"][0]["ingredients"][0] = broken_link
+    with pytest.raises(ToolError, match="Step 1"):
+        recipe_creation.validate_recipe(json.dumps(recipe))
+
+
+def test_duplicate_ingredient_link_is_rejected():
+    recipe = linked_recipe()
+    recipe["steps"][0]["ingredients"].append(
+        {"text": "light soy sauce", "ingredient": "40 g light soy sauce"}
+    )
+    with pytest.raises(ToolError, match="only once"):
+        recipe_creation.validate_recipe(json.dumps(recipe))
+
+
+@pytest.mark.asyncio
+async def test_approved_create_transfers_all_three_links_without_live_cookidoo(monkeypatch):
+    recipe = linked_recipe()
+    payload = json.dumps(recipe)
+    preview = json.loads(recipe_creation.preview(payload))
+    monkeypatch.setenv("COOKIDOO_RECIPE_CREATION_ENABLED", "true")
+    monkeypatch.setenv("COOKIDOO_WRITE_GUARD_BUCKET", "aws2022-lambda-code")
+    monkeypatch.setattr(recipe_creation, "_reserve_title", lambda *args: None)
+    service = SimpleNamespace(
+        list_custom_recipes=AsyncMock(return_value=[]),
+        create_custom_recipe=AsyncMock(return_value=SimpleNamespace(
+            id="offline-test-recipe", name=recipe["name"],
+            url="https://cookidoo.co.uk/created-recipes/offline-test-recipe")),
+    )
+    await recipe_creation.create(
+        payload, preview["confirmation"], ensure_credentials=lambda: None,
+        get_service=lambda: service,
+    )
+    sent = service.create_custom_recipe.await_args.args[0]
+    assert sent.model_dump(mode="json")["steps"][0]["ingredients"] == (
+        recipe["steps"][0]["ingredients"]
+    )
+    service.create_custom_recipe.assert_awaited_once()
+
+
 def test_confirmation_is_order_independent_but_change_sensitive():
     _, a, _ = recipe_creation.validate_recipe(JSON)
     _, b, _ = recipe_creation.validate_recipe(json.dumps(dict(reversed(list(RECIPE.items())))))
