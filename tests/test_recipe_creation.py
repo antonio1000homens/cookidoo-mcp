@@ -90,7 +90,9 @@ def test_preview_warns_when_guided_additions_have_no_links():
 def test_invalid_ingredient_links_are_rejected(broken_link):
     recipe = linked_recipe()
     recipe["steps"][0]["ingredients"][0] = broken_link
-    with pytest.raises(ToolError, match="Step 1"):
+    # The upstream Cookidoo schema may reject malformed links before our
+    # additional strict reviewer runs; both outcomes must fail closed.
+    with pytest.raises(ToolError, match="Invalid recipe JSON|Step 1"):
         recipe_creation.validate_recipe(json.dumps(recipe))
 
 
