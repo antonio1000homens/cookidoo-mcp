@@ -19,6 +19,7 @@ async def test_exposes_only_read_and_preview_tools(monkeypatch):
         "get_recipe_details",
         "list_custom_recipes",
         "get_custom_recipe",
+        "get_custom_recipe_image_status",
         "generate_recipe_structure",
         "preview_custom_recipe_upload",
         "preview_custom_recipe_update",
