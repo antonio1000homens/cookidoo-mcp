@@ -306,7 +306,12 @@ def test_first_rollout_template_delta_requires_exact_missing_update_flag():
     )
     proposed = original + addition
     old_parameters = set(BASE) - {"EnableRecipeUpdates"}
-    env = guard._expected_environment(BASE, old_parameters)
+    current_params = {
+        entry["ParameterKey"]: entry["ParameterValue"]
+        for entry in stack["Stacks"][0]["Parameters"]
+    }
+    current_params["EnableRecipeUpdates"] = "false"
+    env = guard._expected_environment(current_params, old_parameters)
     assert guard._template_matches_existing(original, proposed, old_parameters)
     assert guard.validate(
         change_set, stack, **args,
