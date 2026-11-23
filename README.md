@@ -219,6 +219,56 @@ IAM roles and CloudFormation stacks have no separate service fee, but the **£0/
 
 ## Custom recipe pictures (review-first)
 
+### Verified image status and post-creation workflow
+
+`get_custom_recipe_image_status(recipe_id)` is **always read-only**. It
+reads the authenticated recipe's *actual stored image reference* and, if that
+reference is a public HTTPS URL, attempts a bounded, SSRF-guarded image
+download and decode. The result distinguishes:
+
+- `missing`: no image reference is stored.
+- `present_and_verified`: a stored HTTPS reference was actually fetched and
+  decoded (not merely preserved as a string).
+- `unreachable`: a stored image URL failed retrieval/decoding.
+- `reference_not_fetchable`: a stored asset identifier/relative path cannot
+  be fetched without inventing a CDN URL. This is **unverified**, not missing.
+- `not_checked`: the recipe could not be read by ID. Neither image presence
+  nor absence can be inferred.
+
+`recipe_list_status` is separately `present`, `absent` or `unavailable`.
+A created recipe may be directly accessible by ID but not yet visible in
+`list_custom_recipes`. That does **not** establish list-confirmed ownership
+for writes, and no upload is permitted until the list contains the recipe.
+
+**After creating a custom recipe with an intended photograph:**
+
+1. Call `upload_custom_recipe` only after the complete recipe preview and
+   explicit creation approval. The create result reports whether the new ID
+   is visible in a subsequent list read; the operation **does not** upload
+   a photo and must not be retried just because the list is delayed.
+2. Call `get_custom_recipe_image_status` with the newly created ID. If the
+   recipe is absent from the list or its status is uncertain, resolve that
+   before attempting image mutation.
+3. With an approved public HTTPS JPEG/PNG photo URL, call
+   `preview_custom_recipe_image(recipe_id, image_url)`. Show the intended
+   image, its content hash, and whether an existing image would be replaced.
+4. Obtain a **new, explicit image-upload approval**. Then call
+   `set_custom_recipe_image` with the exact preview confirmation and
+   `replace_existing=true` only when replacement was expressly approved.
+5. Call `get_custom_recipe_image_status` again. Only report the photograph
+   as **present and verified** if `image_present_and_verified=true`. The
+   upload response itself confirms only that the expected image reference
+   survived Cookidoo read-back; it does not prove the CDN photo is retrievable.
+
+Recipe-update responses now distinguish `image_reference_unchanged` from
+`image_present_and_verified` (unknown unless a separate status check is
+performed). The legacy `image_preserved` and `verified` fields remain for
+backwards compatibility but refer to recipe/image-reference persistence, not
+verified image download. Missing/broken photos and list-delay scenarios are
+covered by offline regression tests. No fixture creates a live recipe or
+uploads a photograph.
+
+
 The MCP now supports `preview_custom_recipe_image(recipe_id, image_url)` and
 `set_custom_recipe_image(recipe_id, image_url, confirmation, replace_existing=false)`.
 It uses Cookidoo's **unofficial**, reverse-engineered signed Cloudinary upload
